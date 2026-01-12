@@ -23,12 +23,10 @@ export const experiments = sqliteTable(
     name: text("name").notNull(),
     problem: text("problem").notNull(),
 
-    // New fields for msrchd
-    profile: text("profile").notNull().default("research"),
     model: text("model").$type<Model>().notNull(),
     agent_count: integer("agent_count").notNull().default(0),
 
-    // New fields for code-msrchd
+    // Code collaboration settings
     sandbox_mode: text("sandbox_mode", {
       enum: ["docker", "worktree"],
     }).notNull().default("docker"),

@@ -61,13 +61,8 @@ program
     DEFAULT_AGENT_COUNT.toString(),
   )
   .option(
-    "--profile <profile>",
-    "Profile to use (only 'code' is supported)",
-    "code",
-  )
-  .option(
     "--repository-url <url>",
-    "Git repository URL to clone for code experiments",
+    "Git repository URL to clone",
   )
   .option(
     "--sandbox-mode <mode>",
@@ -101,16 +96,6 @@ program
       );
     }
 
-    // Validate profile
-    if (options.profile !== "code") {
-      return exitWithError(
-        err(
-          "invalid_parameters_error",
-          `Invalid profile: ${options.profile}. Only 'code' profile is supported.`,
-        ),
-      );
-    }
-
     // Validate sandbox mode
     const sandboxMode = options.sandboxMode;
     if (sandboxMode !== "docker" && sandboxMode !== "worktree") {
@@ -137,7 +122,6 @@ program
       problem: problem.value,
       model: options.model,
       agent_count: agentCount,
-      profile: options.profile,
       sandbox_mode: sandboxMode,
       repository_url: options.repositoryUrl || null,
       repository_path: null, // Will be set when cloned
@@ -173,7 +157,6 @@ program
     console.log(`  Name:        ${e.name}`);
     console.log(`  Model:       ${e.model}`);
     console.log(`  Agents:      ${e.agent_count}`);
-    console.log(`  Profile:     ${e.profile}`);
     console.log(`  Sandbox:     ${e.sandbox_mode}`);
     if (e.repository_url) {
       console.log(`  Repository:  ${e.repository_url}`);
@@ -196,7 +179,7 @@ program
     for (const exp of experiments) {
       const e = exp.toJSON();
       console.log(`  ${e.name}`);
-      console.log(`    Model: ${e.model}, Agents: ${e.agent_count}, Profile: ${e.profile}`);
+      console.log(`    Model: ${e.model}, Agents: ${e.agent_count}, Sandbox: ${e.sandbox_mode}`);
       console.log();
     }
   });
@@ -248,9 +231,8 @@ program
     }
 
     // Build Docker image
-    const experimentData = experiment.toJSON();
-    console.log(`Building Docker image for ${experimentData.profile} profile...`);
-    const buildRes = await buildComputerImage(experimentData.profile);
+    console.log("Building Docker image...");
+    const buildRes = await buildComputerImage();
     if (buildRes.isErr()) {
       return exitWithError(buildRes);
     }

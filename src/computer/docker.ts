@@ -74,8 +74,7 @@ export class DockerComputer implements IComputer {
       const experiment = experimentOrId;
       const agentIndex = agentIndexOrImageName as number;
       const id = computerId(experiment, agentIndex);
-      const profile = experiment.toJSON().profile;
-      const imageName = `agent-computer:${profile}`;
+      const imageName = "agent-computer:latest";
       return this.create(id, imageName);
     }
 

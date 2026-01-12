@@ -26,8 +26,8 @@ import { createLLM } from "@app/models/provider";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-function loadPromptForProfile(profile: string): string {
-  const promptPath = join(__dirname, "../../profiles", profile, "prompt.md");
+function loadPrompt(): string {
+  const promptPath = join(__dirname, "../../agent/prompt.md");
   return readFileSync(promptPath, "utf-8");
 }
 
@@ -479,8 +479,7 @@ Never stay idle and always pro-actively work on solving the problem. If your PR 
       this.messages.push(newMessage.value);
     }
 
-    const profile = this.experiment.toJSON().profile;
-    const systemPrompt = loadPromptForProfile(profile).replace(
+    const systemPrompt = loadPrompt().replace(
       "{{PROBLEM}}",
       this.experiment.toJSON().problem,
     );

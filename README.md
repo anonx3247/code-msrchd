@@ -159,7 +159,6 @@ npx tsx src/srchd.ts list
 - `--sandbox-mode <mode>`: Sandbox isolation mode
   - `docker`: Each agent gets isolated Docker container with repo clone
   - `worktree`: Each agent gets git worktree (lightweight, no Docker required)
-- `--profile <profile>`: Profile to use (only 'code' is supported, default: code)
 
 ### Running Agents
 
