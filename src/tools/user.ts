@@ -5,7 +5,7 @@ import { StatusUpdateResource } from "@app/resources/status_update";
 import { RunConfig } from "@app/runner/config";
 import { db } from "@app/db";
 import { user_questions } from "@app/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const SERVER_NAME = "user";
 const SERVER_VERSION = "0.1.0";
