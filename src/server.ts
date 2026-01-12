@@ -320,7 +320,9 @@ export const createApp = () => {
               return `
         <div class="list-item">
           <div class="list-item-title">
-            PR #${prData.number}: ${sanitizeText(prData.title)}
+            <a href="/experiments/${sanitizeText(name)}/pulls/${prData.number}">
+              PR #${prData.number}: ${sanitizeText(prData.title)}
+            </a>
           </div>
           <div class="list-item-meta">
             <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span> |
@@ -328,7 +330,6 @@ export const createApp = () => {
             Branch: <strong>${sanitizeText(prData.source_branch)}</strong> → <strong>${sanitizeText(prData.target_branch)}</strong> |
             Votes: <strong>${votes}</strong>
           </div>
-          <div class="detail-value markdown-content">${sanitizeMarkdown(prData.description)}</div>
         </div>
       `;
             })
@@ -385,6 +386,94 @@ export const createApp = () => {
 
     return c.html(
       baseTemplate(`${sanitizeText(expData.name)} - Experiment`, content),
+    );
+  });
+
+  // PR detail route
+  app.get("/experiments/:name/pulls/:number", async (c) => {
+    const experimentName = c.req.param("name");
+    const prNumber = parseInt(c.req.param("number"), 10);
+
+    const experimentRes = await ExperimentResource.findByName(experimentName);
+    if (experimentRes.isErr()) {
+      return c.notFound();
+    }
+
+    const experiment = experimentRes.value;
+    const expData = experiment.toJSON();
+
+    const prResult = await PullRequestResource.findByNumber(expData.id, prNumber);
+    if (prResult.isErr()) {
+      return c.notFound();
+    }
+
+    const pr = prResult.value;
+    const prData = pr.toJSON();
+
+    // Get reviews
+    const reviews = await pr.getReviews();
+    const approvalCount = await pr.getApprovalCount();
+
+    // Get votes for this PR
+    const solutions = await SolutionResource.listByExperiment(experiment);
+    const votes = solutions.filter(
+      (sol) => {
+        const prSol = sol.toJSON().pullRequest;
+        return prSol && prSol.id === prData.id;
+      },
+    ).length;
+
+    const reviewsContent =
+      reviews.length > 0
+        ? `
+      <h2>Reviews (${approvalCount} approved)</h2>
+      ${reviews
+        .map(
+          (review) => `
+        <div class="detail-section">
+          <div class="detail-label">Agent ${sanitizeText(review.reviewer)}</div>
+          <div class="detail-value">
+            <span class="${review.decision === "approve" ? "status-published" : review.decision === "request_changes" ? "status-rejected" : "status-submitted"}">${sanitizeText(review.decision ?? "PENDING")}</span>
+          </div>
+          ${review.content ? `
+          <div class="detail-label">Comments</div>
+          <div class="detail-value markdown-content">${sanitizeMarkdown(review.content)}</div>
+          ` : ""}
+        </div>
+      `,
+        )
+        .join("")}
+    `
+        : "<h2>Reviews</h2><p>No reviews yet</p>";
+
+    const pageContent = `
+      <a href="/experiments/${sanitizeText(experimentName)}" class="back-link">&larr; Back to ${sanitizeText(experimentName)}</a>
+      <h1>PR #${sanitizeText(prData.number)}: ${sanitizeText(prData.title)}</h1>
+      <div class="pub-meta">
+        <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span>
+        <span>Agent ${sanitizeText(prData.author)}</span>
+        <span>${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</span>
+        <span>${votes} vote${votes !== 1 ? "s" : ""}</span>
+        <span>${sanitizeText(prData.created.toLocaleString())}</span>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Description</div>
+        <div class="detail-value markdown-content">${sanitizeMarkdown(prData.description)}</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Branch</div>
+        <div class="detail-value">
+          <code>${sanitizeText(prData.source_branch)}</code> → <code>${sanitizeText(prData.target_branch)}</code>
+        </div>
+      </div>
+
+      ${reviewsContent}
+    `;
+
+    return c.html(
+      baseTemplate(`PR #${sanitizeText(prData.number)} - ${sanitizeText(experimentName)}`, pageContent),
     );
   });
 
