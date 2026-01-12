@@ -7,12 +7,7 @@ import { ExperimentResource } from "@app/resources/experiment";
 import { MessageResource } from "@app/resources/messages";
 import { SolutionResource } from "@app/resources/solutions";
 import { PullRequestResource } from "@app/resources/pull_request";
-import { RepositoryResource } from "@app/resources/repository";
 import { StatusUpdateResource } from "@app/resources/status_update";
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
 
 const sanitizeText = (value: unknown): string => {
   const input =
@@ -304,9 +299,7 @@ export const createApp = () => {
               const prData = pr.toJSON();
               return `
             <div class="vote-item">
-              <a href="/experiments/${sanitizeText(name)}/pulls/${prData.number}">
-                PR #${prData.number}: ${sanitizeText(prData.title)}
-              </a>
+              PR #${prData.number}: ${sanitizeText(prData.title)}
               - <strong>${votes} vote${votes > 1 ? "s" : ""}</strong>
             </div>
           `;
@@ -321,23 +314,21 @@ export const createApp = () => {
               (a, b) =>
                 b.toJSON().created.getTime() - a.toJSON().created.getTime(),
             )
-            .slice(0, 10)
             .map((pr) => {
               const prData = pr.toJSON();
               const votes = votesByPR[prData.id] || 0;
               return `
         <div class="list-item">
           <div class="list-item-title">
-            <a href="/experiments/${sanitizeText(name)}/pulls/${prData.number}">
-              PR #${prData.number}: ${sanitizeText(prData.title)}
-            </a>
+            PR #${prData.number}: ${sanitizeText(prData.title)}
           </div>
           <div class="list-item-meta">
             <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span> |
             Author: <strong>Agent ${sanitizeText(prData.author)}</strong> |
-            Branch: <strong>${sanitizeText(prData.source_branch)}</strong> |
+            Branch: <strong>${sanitizeText(prData.source_branch)}</strong> → <strong>${sanitizeText(prData.target_branch)}</strong> |
             Votes: <strong>${votes}</strong>
           </div>
+          <div class="detail-value markdown-content">${sanitizeMarkdown(prData.description)}</div>
         </div>
       `;
             })
@@ -354,7 +345,7 @@ export const createApp = () => {
           <div class="stat-label">Agents</div>
         </div>
         <div class="stat-item">
-          <div class="stat-value"><a href="/experiments/${sanitizeText(name)}/pulls">${openPRs.length} open</a></div>
+          <div class="stat-value">${openPRs.length}</div>
           <div class="stat-label">Open PRs</div>
         </div>
         <div class="stat-item">
@@ -372,8 +363,6 @@ export const createApp = () => {
       </div>
 
       <div style="margin: 1rem 0;">
-        <a href="/experiments/${sanitizeText(name)}/pulls" class="back-link">View All Pull Requests &rarr;</a>
-        <span style="margin: 0 1rem;">|</span>
         <a href="/experiments/${sanitizeText(name)}/status" class="back-link">View Status Updates &rarr;</a>
       </div>
 
@@ -390,236 +379,12 @@ export const createApp = () => {
         ${votesContent}
       </div>
 
-      <h2>Recent Pull Requests</h2>
+      <h2>All Pull Requests (${allPRs.length})</h2>
       ${prsContent}
-      <div style="margin-top: 1rem;">
-        <a href="/experiments/${sanitizeText(name)}/pulls" class="back-link">View all ${allPRs.length} pull requests &rarr;</a>
-      </div>
     `;
 
     return c.html(
       baseTemplate(`${sanitizeText(expData.name)} - Experiment`, content),
-    );
-  });
-
-
-  // PR list route
-  app.get("/experiments/:name/pulls", async (c) => {
-    const experimentName = c.req.param("name");
-
-    const experimentRes = await ExperimentResource.findByName(experimentName);
-    if (experimentRes.isErr()) {
-      return c.notFound();
-    }
-
-    const experiment = experimentRes.value;
-    const expData = experiment.toJSON();
-
-    // Get all PRs
-    const allPRs = await PullRequestResource.listByExperiment(expData.id);
-    const openPRs = allPRs.filter(pr => pr.status === "open");
-    const closedPRs = allPRs.filter(pr => pr.status === "closed");
-    const mergedPRs = allPRs.filter(pr => pr.status === "merged");
-
-    const renderPRList = (prs: PullRequestResource[], emptyMsg: string) => {
-      if (prs.length === 0) {
-        return `<p class="list-empty">${emptyMsg}</p>`;
-      }
-      return prs.map(pr => {
-        const prData = pr.toJSON();
-        return `
-          <a href="/experiments/${sanitizeText(experimentName)}/pulls/${sanitizeText(prData.number)}" class="list-item">
-            <div class="list-item-title">#${sanitizeText(prData.number)}: ${sanitizeText(prData.title)}</div>
-            <div class="list-item-meta">
-              <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span>
-              <span>Agent ${sanitizeText(prData.author)}</span>
-              <span>${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</span>
-              <span>${sanitizeText(prData.created.toLocaleString())}</span>
-            </div>
-          </a>
-        `;
-      }).join("");
-    };
-
-    const pageContent = `
-      <a href="/experiments/${sanitizeText(experimentName)}" class="back-link">&larr; Back to ${sanitizeText(experimentName)}</a>
-      <h1>Pull Requests</h1>
-
-      <h2>Open (${openPRs.length})</h2>
-      <div class="list">
-        ${renderPRList(openPRs, "No open pull requests")}
-      </div>
-
-      <h2>Merged (${mergedPRs.length})</h2>
-      <div class="list">
-        ${renderPRList(mergedPRs, "No merged pull requests")}
-      </div>
-
-      <h2>Closed (${closedPRs.length})</h2>
-      <div class="list">
-        ${renderPRList(closedPRs, "No closed pull requests")}
-      </div>
-    `;
-
-    return c.html(
-      baseTemplate(`Pull Requests - ${sanitizeText(experimentName)}`, pageContent),
-    );
-  });
-
-  // PR detail route
-  app.get("/experiments/:name/pulls/:number", async (c) => {
-    const experimentName = c.req.param("name");
-    const prNumber = parseInt(c.req.param("number"), 10);
-
-    const experimentRes = await ExperimentResource.findByName(experimentName);
-    if (experimentRes.isErr()) {
-      return c.notFound();
-    }
-
-    const experiment = experimentRes.value;
-    const expData = experiment.toJSON();
-
-    const prResult = await PullRequestResource.findByNumber(expData.id, prNumber);
-    if (prResult.isErr()) {
-      return c.notFound();
-    }
-
-    const pr = prResult.value;
-    const prData = pr.toJSON();
-
-    // Get reviews
-    const reviews = await pr.getReviews();
-    const approvalCount = await pr.getApprovalCount();
-
-    // Get repository info to run git diff
-    const repoResult = await RepositoryResource.findByExperiment(expData.id);
-    let diffContent = "";
-    if (repoResult.isOk()) {
-      const repo = repoResult.value;
-      try {
-        const { stdout } = await execAsync(
-          `git -C "${repo.path}" diff ${prData.target_branch}..${prData.source_branch} --stat`,
-        );
-        diffContent = stdout;
-      } catch {
-        diffContent = "Unable to generate diff";
-      }
-    }
-
-    // Get votes for this PR
-    const solutions = await SolutionResource.listByExperiment(experiment);
-    const votes = solutions.filter(
-      (sol) => {
-        const pr = sol.toJSON().pullRequest;
-        return pr && pr.id === prData.id;
-      },
-    ).length;
-
-    const reviewsContent =
-      reviews.length > 0
-        ? `
-      <h2>Reviews (${approvalCount} approved)</h2>
-      ${reviews
-        .map(
-          (review) => `
-        <div class="detail-section">
-          <div class="detail-label">Agent ${sanitizeText(review.reviewer)}</div>
-          <div class="detail-value">
-            <span class="${review.decision === "approve" ? "status-published" : review.decision === "request_changes" ? "status-rejected" : "status-submitted"}">${sanitizeText(review.decision ?? "PENDING")}</span>
-          </div>
-          ${review.content ? `
-          <div class="detail-label">Comments</div>
-          <div class="detail-value markdown-content">${sanitizeMarkdown(review.content)}</div>
-          ` : ""}
-        </div>
-      `,
-        )
-        .join("")}
-    `
-        : "<h2>Reviews</h2><p>No reviews yet</p>";
-
-    const pageContent = `
-      <a href="/experiments/${sanitizeText(experimentName)}/pulls" class="back-link">&larr; Back to PRs</a>
-      <h1>PR #${sanitizeText(prData.number)}: ${sanitizeText(prData.title)}</h1>
-      <div class="pub-meta">
-        <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span>
-        <span>Agent ${sanitizeText(prData.author)}</span>
-        <span>${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</span>
-        <span>${votes} vote${votes !== 1 ? "s" : ""}</span>
-        <span>${sanitizeText(prData.created.toLocaleString())}</span>
-      </div>
-
-      <div class="detail-section">
-        <div class="detail-label">Description</div>
-        <div class="detail-value markdown-content">${sanitizeMarkdown(prData.description)}</div>
-      </div>
-
-      <div class="detail-section">
-        <div class="detail-label">Changes</div>
-        <div class="detail-value">
-          <pre style="background: #f5f5f5; padding: 1em; overflow-x: auto;">${sanitizeText(diffContent)}</pre>
-          <a href="/experiments/${sanitizeText(experimentName)}/pulls/${sanitizeText(prData.number)}/diff" class="back-link">View full diff &rarr;</a>
-        </div>
-      </div>
-
-      ${reviewsContent}
-    `;
-
-    return c.html(
-      baseTemplate(`PR #${sanitizeText(prData.number)} - ${sanitizeText(experimentName)}`, pageContent),
-    );
-  });
-
-  // PR full diff route
-  app.get("/experiments/:name/pulls/:number/diff", async (c) => {
-    const experimentName = c.req.param("name");
-    const prNumber = parseInt(c.req.param("number"), 10);
-
-    const experimentRes = await ExperimentResource.findByName(experimentName);
-    if (experimentRes.isErr()) {
-      return c.notFound();
-    }
-
-    const experiment = experimentRes.value;
-    const expData = experiment.toJSON();
-
-    const prResult = await PullRequestResource.findByNumber(expData.id, prNumber);
-    if (prResult.isErr()) {
-      return c.notFound();
-    }
-
-    const pr = prResult.value;
-    const prData = pr.toJSON();
-
-    // Get repository and generate full diff
-    const repoResult = await RepositoryResource.findByExperiment(expData.id);
-    let diffContent = "";
-    if (repoResult.isOk()) {
-      const repo = repoResult.value;
-      try {
-        const { stdout } = await execAsync(
-          `git -C "${repo.path}" diff ${prData.target_branch}..${prData.source_branch}`,
-        );
-        diffContent = stdout || "No changes";
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        diffContent = `Error generating diff: ${message}`;
-      }
-    } else {
-      diffContent = "Repository not found";
-    }
-
-    const pageContent = `
-      <a href="/experiments/${sanitizeText(experimentName)}/pulls/${sanitizeText(prData.number)}" class="back-link">&larr; Back to PR #${sanitizeText(prData.number)}</a>
-      <h1>Diff: ${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</h1>
-
-      <div class="detail-section">
-        <pre style="background: #f5f5f5; padding: 1em; overflow-x: auto; max-height: 80vh;">${sanitizeText(diffContent)}</pre>
-      </div>
-    `;
-
-    return c.html(
-      baseTemplate(`Diff - PR #${sanitizeText(prData.number)}`, pageContent),
     );
   });
 

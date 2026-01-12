@@ -1,0 +1,75 @@
+I want you to make a few shell scripts I can run in the terminal to use with claude.
+
+I currently have in ~/.zshrc a `ft` and `ftr` functions:
+
+```bash
+alias gp="tc && lint && git push"
+alias gpl="gp --force-with-lease"
+alias sgp="npm run lint && npm run typecheck && git push"
+alias sgpl="sgp --force-with-lease"
+alias gs="git status"
+alias ggm="git checkout main"
+alias gr="git rebase -i"
+alias grc="git rebase --continue"
+alias gf="git commit --amend --no-edit"
+alias gfe="git commit --amend"
+
+unalias gc
+gc() {
+  git commit -m "$(echo $@)"
+}
+
+p() {
+  ga -u
+  gc -m $1
+  gp
+}
+
+ft() {
+  feature_name=$1
+
+  # Check if branch exists, create only if it doesn't
+  if ! git show-ref --verify --quiet refs/heads/$feature_name; then
+    gb $feature_name
+  fi
+
+  project_dir=$(git rev-parse --show-toplevel)
+  project=$(basename $project_dir)
+  cd $project_dir
+  feature_path="../$project-$feature_name"
+
+  # Check if worktree exists, create only if it doesn't
+  if [ ! -d "$feature_path" ]; then
+    git worktree add $feature_path $feature_name
+  fi
+
+  zed $feature_path
+}
+
+ftr() {
+  feature_name=$1
+
+  project_dir=$(git rev-parse --show-toplevel)
+  project=$(basename $project_dir)
+  cd $project_dir
+  feature_path="../$project-$feature_name"
+
+  # Check if worktree exists, delete only if it does
+  if [ -d "$feature_path" ]; then
+    git worktree remove $feature_path
+  fi
+
+  # Check if branch exists, delte only if it does
+  if git show-ref --verify --quiet refs/heads/$feature_name; then
+    gb -D $feature_name
+  fi
+}
+````
+
+I want you to create `cft` and `cftr`. `cft` should create a claude session in a new git-worktree of the repo, with the following system:
+
+ftr <branch-name> -> opens hx editor so I can write a prompt and instructions to model on what to do (if left empty let model determine that from the branch name).
+
+Use this CLAUDE.md file to create one in the worktree tailored to the problem. run with -allow all tools. With the objective of making a PR for me to review.
+
+It should explore, plan and execute until the problem is solved.

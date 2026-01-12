@@ -132,6 +132,20 @@ export class SolutionResource {
     }
   }
 
+  static async getVoteCount(experimentId: number): Promise<number> {
+    const results = await db
+      .select()
+      .from(solutions)
+      .where(eq(solutions.experiment, experimentId));
+    return results.length;
+  }
+
+  static async allAgentsHaveVoted(experiment: ExperimentResource): Promise<boolean> {
+    const expData = experiment.toJSON();
+    const voteCount = await this.getVoteCount(expData.id);
+    return voteCount >= expData.agent_count;
+  }
+
   toJSON() {
     return {
       ...this.data,

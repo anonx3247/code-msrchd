@@ -479,10 +479,9 @@ Never stay idle and always pro-actively work on solving the problem. If your PR 
       this.messages.push(newMessage.value);
     }
 
-    const systemPrompt = loadPrompt().replace(
-      "{{PROBLEM}}",
-      this.experiment.toJSON().problem,
-    );
+    const systemPrompt = loadPrompt()
+      .replace("{{PROBLEM}}", this.experiment.toJSON().problem)
+      .replace(/\{\{AGENT_INDEX\}\}/g, this.agentIndex.toString());
 
     const messagesForModel = await this.renderForModel(
       systemPrompt,

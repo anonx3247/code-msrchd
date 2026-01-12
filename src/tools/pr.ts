@@ -8,6 +8,10 @@ import { RepositoryResource } from "@app/resources/repository";
 import { SolutionResource } from "@app/resources/solutions";
 import { err } from "@app/lib/error";
 import { RunConfig } from "@app/runner/config";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const SERVER_NAME = "pr";
 const SERVER_VERSION = "0.1.0";
@@ -62,6 +66,20 @@ export async function createPRServer(
         return errorToCallToolResult(repoResult);
       }
       const repo = repoResult.value;
+
+      // Verify source branch exists
+      try {
+        await execAsync(
+          `git -C "${repo.path}" rev-parse --verify "${source_branch}"`,
+        );
+      } catch {
+        return errorToCallToolResult(
+          err(
+            "tool_error",
+            `Branch '${source_branch}' does not exist. Please create and push the branch first.`,
+          ),
+        );
+      }
 
       // Get next PR number
       const prNumber = await PullRequestResource.getNextNumber(
@@ -162,6 +180,10 @@ ${r.content ?? ""}`,
 
 DESCRIPTION:
 ${pr.description}
+
+BRANCH INFO:
+To review this PR, checkout the branch: git checkout ${pr.sourceBranch}
+Compare with target: git diff ${pr.targetBranch}..${pr.sourceBranch}
 
 REVIEWS:
 ${reviewsText}`,
