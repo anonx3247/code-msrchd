@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { readFileContent } from "./lib/fs";
 import { Err, err, SrchdError } from "./lib/error";
 import { ExperimentResource } from "./resources/experiment";
+import { RepositoryResource } from "./resources/repository";
 import { Runner } from "./runner";
 import { isArrayOf, isString, removeNulls } from "./lib/utils";
 import { buildComputerImage } from "./computer/image";
@@ -13,10 +14,7 @@ import { MessageResource } from "./resources/messages";
 import { db } from "./db";
 import {
   messages,
-  reviews,
-  citations,
   solutions,
-  publications,
 } from "./db/schema";
 import { eq } from "drizzle-orm";
 import { spawn } from "child_process";
@@ -60,9 +58,13 @@ program
     DEFAULT_AGENT_COUNT.toString(),
   )
   .option(
-    "--profile <profile>",
-    "Profile to use (research, formal-math, security)",
-    "research",
+    "--repository-url <url>",
+    "Git repository URL to clone",
+  )
+  .option(
+    "--sandbox-mode <mode>",
+    "Sandbox mode: docker or worktree (default: docker)",
+    "docker",
   )
   .action(async (name, options) => {
     console.log(`Creating experiment: ${name}`);
@@ -91,13 +93,23 @@ program
       );
     }
 
-    // Validate profile
-    const validProfiles = ["research", "formal-math", "security", "arc-agi"];
-    if (!validProfiles.includes(options.profile)) {
+    // Validate sandbox mode
+    const sandboxMode = options.sandboxMode;
+    if (sandboxMode !== "docker" && sandboxMode !== "worktree") {
       return exitWithError(
         err(
           "invalid_parameters_error",
-          `Invalid profile: ${options.profile}. Must be one of: ${validProfiles.join(", ")}`,
+          `Invalid sandbox mode: ${sandboxMode}. Must be 'docker' or 'worktree'`,
+        ),
+      );
+    }
+
+    // Repository URL is required
+    if (!options.repositoryUrl) {
+      return exitWithError(
+        err(
+          "invalid_parameters_error",
+          "Repository URL is required (--repository-url option)",
         ),
       );
     }
@@ -107,15 +119,45 @@ program
       problem: problem.value,
       model: options.model,
       agent_count: agentCount,
-      profile: options.profile,
+      sandbox_mode: sandboxMode,
+      repository_url: options.repositoryUrl ?? null,
+      repository_path: null, // Will be set when cloned
     });
+
+    // Clone repository if URL provided
+    if (options.repositoryUrl) {
+      console.log(`\nCloning repository: ${options.repositoryUrl}`);
+      const repoResult = await RepositoryResource.clone(
+        experiment.toJSON().id,
+        options.repositoryUrl,
+        "./experiments",
+      );
+
+      if (repoResult.isErr()) {
+        // Clean up experiment
+        await experiment.delete();
+        return exitWithError(repoResult);
+      }
+
+      const repo = repoResult.value;
+
+      // Update experiment with repository path
+      await experiment.update({
+        repository_path: repo.path,
+      });
+
+      console.log(`Repository cloned to: ${repo.path}`);
+    }
 
     const e = experiment.toJSON();
     console.log(`\nExperiment created:`);
-    console.log(`  Name:    ${e.name}`);
-    console.log(`  Model:   ${e.model}`);
-    console.log(`  Agents:  ${e.agent_count}`);
-    console.log(`  Profile: ${e.profile}`);
+    console.log(`  Name:        ${e.name}`);
+    console.log(`  Model:       ${e.model}`);
+    console.log(`  Agents:      ${e.agent_count}`);
+    console.log(`  Sandbox:     ${e.sandbox_mode}`);
+    if (e.repository_url) {
+      console.log(`  Repository:  ${e.repository_url}`);
+    }
   });
 
 // List command
@@ -134,7 +176,7 @@ program
     for (const exp of experiments) {
       const e = exp.toJSON();
       console.log(`  ${e.name}`);
-      console.log(`    Model: ${e.model}, Agents: ${e.agent_count}, Profile: ${e.profile}`);
+      console.log(`    Model: ${e.model}, Agents: ${e.agent_count}, Sandbox: ${e.sandbox_mode}`);
       console.log();
     }
   });
@@ -186,9 +228,8 @@ program
     }
 
     // Build Docker image
-    const experimentData = experiment.toJSON();
-    console.log(`Building Docker image for ${experimentData.profile} profile...`);
-    const buildRes = await buildComputerImage(experimentData.profile);
+    console.log("Building Docker image...");
+    const buildRes = await buildComputerImage();
     if (buildRes.isErr()) {
       return exitWithError(buildRes);
     }
@@ -428,17 +469,8 @@ program
     console.log("  Deleting messages...");
     db.delete(messages).where(eq(messages.experiment, expId)).run();
 
-    console.log("  Deleting reviews...");
-    db.delete(reviews).where(eq(reviews.experiment, expId)).run();
-
-    console.log("  Deleting citations...");
-    db.delete(citations).where(eq(citations.experiment, expId)).run();
-
     console.log("  Deleting solutions...");
     db.delete(solutions).where(eq(solutions.experiment, expId)).run();
-
-    console.log("  Deleting publications...");
-    db.delete(publications).where(eq(publications.experiment, expId)).run();
 
     console.log("  Deleting experiment...");
     await experiment.delete();

@@ -5,12 +5,14 @@ import fs from "fs";
 import path from "path";
 import { ExperimentResource } from "@app/resources/experiment";
 import { MessageResource } from "@app/resources/messages";
-import { PublicationResource } from "@app/resources/publication";
 import { SolutionResource } from "@app/resources/solutions";
-import {
-  getAttachmentPath,
-  getPublicationContent,
-} from "@app/tools/publications";
+import { PullRequestResource } from "@app/resources/pull_request";
+import { RepositoryResource } from "@app/resources/repository";
+import { StatusUpdateResource } from "@app/resources/status_update";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const sanitizeText = (value: unknown): string => {
   const input =
@@ -187,27 +189,29 @@ export const createApp = () => {
               ? `$${cost.toFixed(4)}`
               : `$${cost.toFixed(2)}`;
 
-        const publications = await PublicationResource.listByExperiment(exp);
+        const allPRs = await PullRequestResource.listByExperiment(exp.toJSON().id);
         const solutions = await SolutionResource.listByExperiment(exp);
 
-        // Count votes per publication
-        const votesByPublication = solutions.reduce(
+        // Count votes per PR
+        const votesByPR = solutions.reduce(
           (acc, sol) => {
-            const pubId = sol.toJSON().publication.id;
-            acc[pubId] = (acc[pubId] || 0) + 1;
+            const pr = sol.toJSON().pullRequest;
+            if (pr) {
+              acc[pr.id] = (acc[pr.id] || 0) + 1;
+            }
             return acc;
           },
           {} as Record<number, number>,
         );
 
-        const topVoted = Object.entries(votesByPublication).sort(
+        const topVoted = Object.entries(votesByPR).sort(
           (a, b) => b[1] - a[1],
         )[0];
 
         return {
           exp,
           cost: formattedCost,
-          publicationsCount: publications.length,
+          prsCount: allPRs.length,
           votesCount: solutions.length,
           topVoted: topVoted ? `${topVoted[1]} votes` : "No votes",
         };
@@ -219,7 +223,7 @@ export const createApp = () => {
         ? `
       <h1>Experiments</h1>
       ${experimentsWithMetadata
-        .map(({ exp, cost, publicationsCount, votesCount, topVoted }) => {
+        .map(({ exp, cost, prsCount, votesCount, topVoted }) => {
           const data = exp.toJSON();
           return `
           <div class="list-item">
@@ -230,7 +234,7 @@ export const createApp = () => {
               Model: <strong>${sanitizeText(data.model)}</strong> |
               Agents: <strong>${sanitizeText(data.agent_count)}</strong> |
               Cost: <strong>${sanitizeText(cost)}</strong> |
-              Publications: <strong>${publicationsCount}</strong> |
+              Pull Requests: <strong>${prsCount}</strong> |
               Votes: <strong>${votesCount}</strong> |
               Top: <strong>${sanitizeText(topVoted)}</strong>
             </div>
@@ -259,7 +263,6 @@ export const createApp = () => {
     const experiment = experimentRes.value;
     const expData = experiment.toJSON();
 
-    const publications = await PublicationResource.listByExperiment(experiment);
     const solutions = await SolutionResource.listByExperiment(experiment);
     const cost = await MessageResource.totalCostForExperiment(experiment);
     const formattedCost =
@@ -269,33 +272,40 @@ export const createApp = () => {
           ? `$${cost.toFixed(4)}`
           : `$${cost.toFixed(2)}`;
 
-    // Count votes per publication
-    const votesByPublication = solutions.reduce(
+    // Get PR statistics
+    const allPRs = await PullRequestResource.listByExperiment(expData.id);
+    const openPRs = allPRs.filter(pr => pr.status === "open");
+    const mergedPRs = allPRs.filter(pr => pr.status === "merged");
+
+    // Count votes per PR
+    const votesByPR = solutions.reduce(
       (acc, sol) => {
-        const pubId = sol.toJSON().publication.id;
-        acc[pubId] = (acc[pubId] || 0) + 1;
+        const pr = sol.toJSON().pullRequest;
+        if (pr) {
+          acc[pr.id] = (acc[pr.id] || 0) + 1;
+        }
         return acc;
       },
       {} as Record<number, number>,
     );
 
-    const sortedVotes = Object.entries(votesByPublication)
+    const sortedVotes = Object.entries(votesByPR)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10);
 
     const votesContent =
       sortedVotes.length > 0
         ? sortedVotes
-            .map(([pubId, votes]) => {
-              const pub = publications.find(
-                (p) => p.toJSON().id === parseInt(pubId),
+            .map(([prId, votes]) => {
+              const pr = allPRs.find(
+                (p) => p.toJSON().id === parseInt(prId),
               );
-              if (!pub) return "";
-              const pubData = pub.toJSON();
+              if (!pr) return "";
+              const prData = pr.toJSON();
               return `
             <div class="vote-item">
-              <a href="/experiments/${sanitizeText(name)}/publications/${sanitizeText(pubData.reference)}">
-                ${sanitizeText(pubData.title)}
+              <a href="/experiments/${sanitizeText(name)}/pulls/${prData.number}">
+                PR #${prData.number}: ${sanitizeText(prData.title)}
               </a>
               - <strong>${votes} vote${votes > 1 ? "s" : ""}</strong>
             </div>
@@ -304,34 +314,35 @@ export const createApp = () => {
             .join("")
         : "<div class='empty-state'>No votes yet</div>";
 
-    const publicationsContent =
-      publications.length > 0
-        ? publications
+    const prsContent =
+      allPRs.length > 0
+        ? allPRs
             .sort(
               (a, b) =>
                 b.toJSON().created.getTime() - a.toJSON().created.getTime(),
             )
-            .map((pub) => {
-              const pubData = pub.toJSON();
-              const votes = votesByPublication[pubData.id] || 0;
+            .slice(0, 10)
+            .map((pr) => {
+              const prData = pr.toJSON();
+              const votes = votesByPR[prData.id] || 0;
               return `
         <div class="list-item">
           <div class="list-item-title">
-            <a href="/experiments/${sanitizeText(name)}/publications/${sanitizeText(pubData.reference)}">
-              ${sanitizeText(pubData.title)}
+            <a href="/experiments/${sanitizeText(name)}/pulls/${prData.number}">
+              PR #${prData.number}: ${sanitizeText(prData.title)}
             </a>
           </div>
           <div class="list-item-meta">
-            <span class="${safeStatusClass(pubData.status)}">${sanitizeText(pubData.status)}</span> |
-            Author: <strong>Agent ${sanitizeText(pubData.author)}</strong> |
-            Ref: <strong>${sanitizeText(pubData.reference)}</strong> |
+            <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span> |
+            Author: <strong>Agent ${sanitizeText(prData.author)}</strong> |
+            Branch: <strong>${sanitizeText(prData.source_branch)}</strong> |
             Votes: <strong>${votes}</strong>
           </div>
         </div>
       `;
             })
             .join("")
-        : "<div class='empty-state'>No publications yet</div>";
+        : "<div class='empty-state'>No pull requests yet</div>";
 
     const content = `
       <a href="/" class="back-link">&larr; Back to Experiments</a>
@@ -343,8 +354,12 @@ export const createApp = () => {
           <div class="stat-label">Agents</div>
         </div>
         <div class="stat-item">
-          <div class="stat-value">${publications.length}</div>
-          <div class="stat-label">Publications</div>
+          <div class="stat-value"><a href="/experiments/${sanitizeText(name)}/pulls">${openPRs.length} open</a></div>
+          <div class="stat-label">Open PRs</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">${mergedPRs.length}</div>
+          <div class="stat-label">Merged PRs</div>
         </div>
         <div class="stat-item">
           <div class="stat-value">${solutions.length}</div>
@@ -356,6 +371,12 @@ export const createApp = () => {
         </div>
       </div>
 
+      <div style="margin: 1rem 0;">
+        <a href="/experiments/${sanitizeText(name)}/pulls" class="back-link">View All Pull Requests &rarr;</a>
+        <span style="margin: 0 1rem;">|</span>
+        <a href="/experiments/${sanitizeText(name)}/status" class="back-link">View Status Updates &rarr;</a>
+      </div>
+
       <div class="detail-section">
         <div class="detail-label">Model</div>
         <div class="detail-value">${sanitizeText(expData.model)}</div>
@@ -364,13 +385,16 @@ export const createApp = () => {
         <div class="detail-value markdown-content">${sanitizeMarkdown(expData.problem)}</div>
       </div>
 
-      <h2>Solution Votes</h2>
+      <h2>Top Voted Solutions</h2>
       <div class="detail-section">
         ${votesContent}
       </div>
 
-      <h2>Publications</h2>
-      ${publicationsContent}
+      <h2>Recent Pull Requests</h2>
+      ${prsContent}
+      <div style="margin-top: 1rem;">
+        <a href="/experiments/${sanitizeText(name)}/pulls" class="back-link">View all ${allPRs.length} pull requests &rarr;</a>
+      </div>
     `;
 
     return c.html(
@@ -378,10 +402,10 @@ export const createApp = () => {
     );
   });
 
-  // Publication detail
-  app.get("/experiments/:name/publications/:ref", async (c) => {
+
+  // PR list route
+  app.get("/experiments/:name/pulls", async (c) => {
     const experimentName = c.req.param("name");
-    const reference = c.req.param("ref");
 
     const experimentRes = await ExperimentResource.findByName(experimentName);
     if (experimentRes.isErr()) {
@@ -389,138 +413,253 @@ export const createApp = () => {
     }
 
     const experiment = experimentRes.value;
-    const publication = await PublicationResource.findByReference(
-      experiment,
-      reference,
+    const expData = experiment.toJSON();
+
+    // Get all PRs
+    const allPRs = await PullRequestResource.listByExperiment(expData.id);
+    const openPRs = allPRs.filter(pr => pr.status === "open");
+    const closedPRs = allPRs.filter(pr => pr.status === "closed");
+    const mergedPRs = allPRs.filter(pr => pr.status === "merged");
+
+    const renderPRList = (prs: PullRequestResource[], emptyMsg: string) => {
+      if (prs.length === 0) {
+        return `<p class="list-empty">${emptyMsg}</p>`;
+      }
+      return prs.map(pr => {
+        const prData = pr.toJSON();
+        return `
+          <a href="/experiments/${sanitizeText(experimentName)}/pulls/${sanitizeText(prData.number)}" class="list-item">
+            <div class="list-item-title">#${sanitizeText(prData.number)}: ${sanitizeText(prData.title)}</div>
+            <div class="list-item-meta">
+              <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span>
+              <span>Agent ${sanitizeText(prData.author)}</span>
+              <span>${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</span>
+              <span>${sanitizeText(prData.created.toLocaleString())}</span>
+            </div>
+          </a>
+        `;
+      }).join("");
+    };
+
+    const pageContent = `
+      <a href="/experiments/${sanitizeText(experimentName)}" class="back-link">&larr; Back to ${sanitizeText(experimentName)}</a>
+      <h1>Pull Requests</h1>
+
+      <h2>Open (${openPRs.length})</h2>
+      <div class="list">
+        ${renderPRList(openPRs, "No open pull requests")}
+      </div>
+
+      <h2>Merged (${mergedPRs.length})</h2>
+      <div class="list">
+        ${renderPRList(mergedPRs, "No merged pull requests")}
+      </div>
+
+      <h2>Closed (${closedPRs.length})</h2>
+      <div class="list">
+        ${renderPRList(closedPRs, "No closed pull requests")}
+      </div>
+    `;
+
+    return c.html(
+      baseTemplate(`Pull Requests - ${sanitizeText(experimentName)}`, pageContent),
     );
-    if (!publication) {
+  });
+
+  // PR detail route
+  app.get("/experiments/:name/pulls/:number", async (c) => {
+    const experimentName = c.req.param("name");
+    const prNumber = parseInt(c.req.param("number"), 10);
+
+    const experimentRes = await ExperimentResource.findByName(experimentName);
+    if (experimentRes.isErr()) {
       return c.notFound();
     }
 
-    const pubData = publication.toJSON();
+    const experiment = experimentRes.value;
+    const expData = experiment.toJSON();
 
-    const content = getPublicationContent(reference);
-    if (!content) {
-      return c.text("Publication content not found", 404);
+    const prResult = await PullRequestResource.findByNumber(expData.id, prNumber);
+    if (prResult.isErr()) {
+      return c.notFound();
     }
 
-    // Get attachments
-    const attachmentsDir = getAttachmentPath(reference);
-    const attachments = fs.existsSync(attachmentsDir)
-      ? fs.readdirSync(attachmentsDir)
-      : [];
+    const pr = prResult.value;
+    const prData = pr.toJSON();
 
-    // Get votes
+    // Get reviews
+    const reviews = await pr.getReviews();
+    const approvalCount = await pr.getApprovalCount();
+
+    // Get repository info to run git diff
+    const repoResult = await RepositoryResource.findByExperiment(expData.id);
+    let diffContent = "";
+    if (repoResult.isOk()) {
+      const repo = repoResult.value;
+      try {
+        const { stdout } = await execAsync(
+          `git -C "${repo.path}" diff ${prData.target_branch}..${prData.source_branch} --stat`,
+        );
+        diffContent = stdout;
+      } catch {
+        diffContent = "Unable to generate diff";
+      }
+    }
+
+    // Get votes for this PR
     const solutions = await SolutionResource.listByExperiment(experiment);
     const votes = solutions.filter(
-      (sol) => sol.toJSON().publication.id === pubData.id,
+      (sol) => {
+        const pr = sol.toJSON().pullRequest;
+        return pr && pr.id === prData.id;
+      },
     ).length;
 
-    const attachmentsContent =
-      attachments.length > 0
-        ? `
-        <div class="detail-label">Files</div>
-        <div class="file-list">
-          ${attachments
-            .map(
-              (att) => `
-            <div class="file-item">
-              <a href="/experiments/${sanitizeText(experimentName)}/publications/${sanitizeText(reference)}/attachments/${sanitizeText(att)}">
-                ${sanitizeText(att)}
-              </a>
-            </div>
-          `,
-            )
-            .join("")}
-        </div>
-      `
-        : "";
-
     const reviewsContent =
-      pubData.reviews.length > 0
+      reviews.length > 0
         ? `
-      <h2>Reviews</h2>
-      ${pubData.reviews
+      <h2>Reviews (${approvalCount} approved)</h2>
+      ${reviews
         .map(
           (review) => `
         <div class="detail-section">
-          <div class="detail-label">Agent ${sanitizeText(review.author)}</div>
+          <div class="detail-label">Agent ${sanitizeText(review.reviewer)}</div>
           <div class="detail-value">
-            <span class="${review.grade === "ACCEPT" ? "status-published" : review.grade === "REJECT" ? "status-rejected" : "status-submitted"}">${sanitizeText(review.grade ?? "PENDING")}</span>
+            <span class="${review.decision === "approve" ? "status-published" : review.decision === "request_changes" ? "status-rejected" : "status-submitted"}">${sanitizeText(review.decision ?? "PENDING")}</span>
           </div>
-          <div class="detail-label">Review</div>
-          <div class="detail-value markdown-content">${sanitizeMarkdown(review.content ?? "No content")}</div>
+          ${review.content ? `
+          <div class="detail-label">Comments</div>
+          <div class="detail-value markdown-content">${sanitizeMarkdown(review.content)}</div>
+          ` : ""}
         </div>
       `,
         )
         .join("")}
     `
-        : "";
+        : "<h2>Reviews</h2><p>No reviews yet</p>";
 
     const pageContent = `
-      <a href="/experiments/${sanitizeText(experimentName)}" class="back-link">&larr; Back to ${sanitizeText(experimentName)}</a>
-      <h1>${sanitizeText(pubData.title)}</h1>
+      <a href="/experiments/${sanitizeText(experimentName)}/pulls" class="back-link">&larr; Back to PRs</a>
+      <h1>PR #${sanitizeText(prData.number)}: ${sanitizeText(prData.title)}</h1>
       <div class="pub-meta">
-        <span class="${safeStatusClass(pubData.status)}">${sanitizeText(pubData.status)}</span>
-        <span>Agent ${sanitizeText(pubData.author)}</span>
-        <span>${sanitizeText(pubData.reference)}</span>
+        <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span>
+        <span>Agent ${sanitizeText(prData.author)}</span>
+        <span>${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</span>
         <span>${votes} vote${votes !== 1 ? "s" : ""}</span>
-        <span>${sanitizeText(pubData.created.toLocaleString())}</span>
+        <span>${sanitizeText(prData.created.toLocaleString())}</span>
       </div>
-      ${attachmentsContent ? `<div class="detail-section">${attachmentsContent}</div>` : ""}
 
       <div class="detail-section">
-        <div class="markdown-content">${sanitizeMarkdown(content)}</div>
+        <div class="detail-label">Description</div>
+        <div class="detail-value markdown-content">${sanitizeMarkdown(prData.description)}</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Changes</div>
+        <div class="detail-value">
+          <pre style="background: #f5f5f5; padding: 1em; overflow-x: auto;">${sanitizeText(diffContent)}</pre>
+          <a href="/experiments/${sanitizeText(experimentName)}/pulls/${sanitizeText(prData.number)}/diff" class="back-link">View full diff &rarr;</a>
+        </div>
       </div>
 
       ${reviewsContent}
     `;
 
     return c.html(
-      baseTemplate(
-        `${sanitizeText(pubData.title)} - Publication`,
-        pageContent,
-      ),
+      baseTemplate(`PR #${sanitizeText(prData.number)} - ${sanitizeText(experimentName)}`, pageContent),
     );
   });
 
-  // Publication attachment download
-  app.get(
-    "/experiments/:name/publications/:ref/attachments/:attachment",
-    async (c) => {
-      const experimentName = c.req.param("name");
-      const reference = c.req.param("ref");
-      const attachment = c.req.param("attachment");
+  // PR full diff route
+  app.get("/experiments/:name/pulls/:number/diff", async (c) => {
+    const experimentName = c.req.param("name");
+    const prNumber = parseInt(c.req.param("number"), 10);
 
-      const experimentRes = await ExperimentResource.findByName(experimentName);
-      if (experimentRes.isErr()) {
-        return c.notFound();
+    const experimentRes = await ExperimentResource.findByName(experimentName);
+    if (experimentRes.isErr()) {
+      return c.notFound();
+    }
+
+    const experiment = experimentRes.value;
+    const expData = experiment.toJSON();
+
+    const prResult = await PullRequestResource.findByNumber(expData.id, prNumber);
+    if (prResult.isErr()) {
+      return c.notFound();
+    }
+
+    const pr = prResult.value;
+    const prData = pr.toJSON();
+
+    // Get repository and generate full diff
+    const repoResult = await RepositoryResource.findByExperiment(expData.id);
+    let diffContent = "";
+    if (repoResult.isOk()) {
+      const repo = repoResult.value;
+      try {
+        const { stdout } = await execAsync(
+          `git -C "${repo.path}" diff ${prData.target_branch}..${prData.source_branch}`,
+        );
+        diffContent = stdout || "No changes";
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        diffContent = `Error generating diff: ${message}`;
       }
+    } else {
+      diffContent = "Repository not found";
+    }
 
-      const experiment = experimentRes.value;
-      const publication = await PublicationResource.findByReference(
-        experiment,
-        reference,
-      );
-      if (!publication) {
-        return c.notFound();
-      }
+    const pageContent = `
+      <a href="/experiments/${sanitizeText(experimentName)}/pulls/${sanitizeText(prData.number)}" class="back-link">&larr; Back to PR #${sanitizeText(prData.number)}</a>
+      <h1>Diff: ${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</h1>
 
-      const localPath = getAttachmentPath(reference, attachment);
+      <div class="detail-section">
+        <pre style="background: #f5f5f5; padding: 1em; overflow-x: auto; max-height: 80vh;">${sanitizeText(diffContent)}</pre>
+      </div>
+    `;
 
-      if (!fs.existsSync(localPath)) {
-        return c.notFound();
-      }
+    return c.html(
+      baseTemplate(`Diff - PR #${sanitizeText(prData.number)}`, pageContent),
+    );
+  });
 
-      const fileContent = fs.readFileSync(localPath);
-      const filename = `${experimentName}_${reference}_${attachment}`;
+  // Status updates route
+  app.get("/experiments/:name/status", async (c) => {
+    const experimentName = c.req.param("name");
 
-      return c.body(fileContent, 200, {
-        "Content-Type": "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-      });
-    },
-  );
+    const experimentRes = await ExperimentResource.findByName(experimentName);
+    if (experimentRes.isErr()) {
+      return c.notFound();
+    }
+
+    const experiment = experimentRes.value;
+    const expData = experiment.toJSON();
+
+    const statusUpdates = await StatusUpdateResource.listByExperiment(expData.id);
+
+    const statusContent = statusUpdates.length > 0
+      ? statusUpdates.map(su => {
+          const suData = su.toJSON();
+          return `
+            <div class="detail-section">
+              <div class="detail-label">Agent ${sanitizeText(suData.agent)} - ${sanitizeText(suData.type)}</div>
+              <div class="detail-value">${sanitizeText(suData.created.toLocaleString())}</div>
+              <div class="detail-value markdown-content">${sanitizeMarkdown(suData.content)}</div>
+            </div>
+          `;
+        }).join("")
+      : "<p>No status updates yet</p>";
+
+    const pageContent = `
+      <a href="/experiments/${sanitizeText(experimentName)}" class="back-link">&larr; Back to ${sanitizeText(experimentName)}</a>
+      <h1>Status Updates</h1>
+      ${statusContent}
+    `;
+
+    return c.html(
+      baseTemplate(`Status - ${sanitizeText(experimentName)}`, pageContent),
+    );
+  });
 
   return app;
 };

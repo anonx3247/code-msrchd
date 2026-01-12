@@ -1,5 +1,5 @@
-# Dockerfile for agent-computer:arc-agi
-# Provides a secure, isolated environment for AI agents to solve ARC-AGI problems
+# Dockerfile for agent-computer:code
+# Provides a development environment for AI agents to write and test code
 
 FROM ubuntu:24.04
 
@@ -13,17 +13,25 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core utilities
     sudo bash coreutils findutils grep sed gawk \
-    ca-certificates vim nano less fd-find \
+    ca-certificates curl wget git vim nano less fd-find \
     # Process and system tools
     htop tmux screen psmisc procps \
+    # Development tools
+    build-essential gcc g++ make cmake \
     # Python ecosystem
     python3 python3-pip python3-venv python3-dev \
+    # Node.js ecosystem
+    nodejs npm \
     # Archive tools
     zip unzip tar gzip \
     # Text processing
     jq xmlstarlet \
     # Search Tools
-    ripgrep
+    ripgrep \
+    # Testing tools
+    python3-pytest \
+    # Code quality
+    shellcheck
 
 # Create non-root user 'agent' with uid 1001
 RUN groupadd -g 1001 agent && \
@@ -31,15 +39,25 @@ RUN groupadd -g 1001 agent && \
     # Give agent sudo access (for permissive mode)
     echo 'agent ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
+RUN mkdir -p /home/agent/.ssh && \
+    chown -R agent:agent /home/agent/.ssh && \
+    chmod 700 /home/agent/.ssh
+
 USER agent
+# IDENTITY_FILES_COPY_PLACEHOLDER
 WORKDIR /home/agent
 
 # Create Python virtual environment and install common packages
 RUN python3 -m venv /home/agent/.venv && \
     /home/agent/.venv/bin/pip install --upgrade pip && \
     /home/agent/.venv/bin/pip install \
-    # Data science and analysis
-    numpy pandas matplotlib seaborn plotly
+    pytest pytest-cov \
+    black flake8 mypy \
+    requests
+
+# Configure git
+RUN git config --global user.name "Agent" && \
+    git config --global user.email "agent@msrchd"
 
 # Configure shell environment
 RUN echo 'export PATH="/home/agent/.venv/bin:$PATH"' >> /home/agent/.bashrc && \
@@ -53,5 +71,5 @@ CMD ["/bin/bash"]
 
 # Metadata
 LABEL maintainer="agent-computer" \
-    description="Secure sandbox environment for AI agents solving ARC-AGI problems" \
-    version="1.1"
+      description="Development environment for code-writing AI agents" \
+      version="1.0"

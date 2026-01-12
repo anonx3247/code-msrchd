@@ -48,8 +48,7 @@ For long running commands (running a server) make sure to run them in the backgr
         ),
     },
     async ({ cmd, cwd, env, timeout_ms: timeoutMs }) => {
-      const profile = experiment.toJSON().profile;
-      const imageName = `agent-computer:${profile}`;
+      const imageName = "agent-computer:latest";
       const c = await Computer.ensure(
         computerId(experiment, agentIndex),
         imageName,

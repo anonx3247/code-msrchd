@@ -3,7 +3,7 @@ import { solutions } from "@app/db/schema";
 import { eq, InferSelectModel, and, desc } from "drizzle-orm";
 import { ExperimentResource } from "./experiment";
 import { concurrentExecutor } from "@app/lib/async";
-import { PublicationResource } from "./publication";
+import { PullRequestResource } from "./pull_request";
 import { removeNulls } from "@app/lib/utils";
 import { Result, ok, err } from "@app/lib/error";
 
@@ -11,17 +11,17 @@ type Solution = InferSelectModel<typeof solutions>;
 
 export class SolutionResource {
   private data: Solution;
-  private publication: PublicationResource;
+  private pullRequest: PullRequestResource;
   experiment: ExperimentResource;
 
   private constructor(
     data: Solution,
     experiment: ExperimentResource,
-    publication: PublicationResource,
+    pullRequest: PullRequestResource,
   ) {
     this.data = data;
     this.experiment = experiment;
-    this.publication = publication;
+    this.pullRequest = pullRequest;
   }
 
   static async findLatestByAgent(
@@ -44,15 +44,12 @@ export class SolutionResource {
       return null;
     }
 
-    const publication = await PublicationResource.findById(
-      experiment,
-      result.publication,
-    );
-    if (!publication) {
+    const prResult = await PullRequestResource.findById(result.pull_request);
+    if (prResult.isErr()) {
       return null;
     }
 
-    return new SolutionResource(result, experiment, publication);
+    return new SolutionResource(result, experiment, prResult.value);
   }
 
   static async listByAgent(
@@ -74,14 +71,11 @@ export class SolutionResource {
       await concurrentExecutor(
         results,
         async (sol) => {
-          const publication = await PublicationResource.findById(
-            experiment,
-            sol.publication,
-          );
-          if (!publication) {
+          const prResult = await PullRequestResource.findById(sol.pull_request);
+          if (prResult.isErr()) {
             return null;
           }
-          return new SolutionResource(sol, experiment, publication);
+          return new SolutionResource(sol, experiment, prResult.value);
         },
         { concurrency: 8 },
       ),
@@ -101,14 +95,11 @@ export class SolutionResource {
       await concurrentExecutor(
         results,
         async (sol) => {
-          const publication = await PublicationResource.findById(
-            experiment,
-            sol.publication,
-          );
-          if (!publication) {
+          const prResult = await PullRequestResource.findById(sol.pull_request);
+          if (prResult.isErr()) {
             return null;
           }
-          return new SolutionResource(sol, experiment, publication);
+          return new SolutionResource(sol, experiment, prResult.value);
         },
         { concurrency: 8 },
       ),
@@ -118,7 +109,7 @@ export class SolutionResource {
   static async vote(
     experimentId: number,
     agentIndex: number,
-    publicationId: number,
+    pullRequestId: number,
   ): Promise<Result<void>> {
     try {
       await db
@@ -126,25 +117,25 @@ export class SolutionResource {
         .values({
           experiment: experimentId,
           agent: agentIndex,
-          publication: publicationId,
+          pull_request: pullRequestId,
         })
         .onConflictDoUpdate({
           target: [solutions.experiment, solutions.agent],
           set: {
-            publication: publicationId,
+            pull_request: pullRequestId,
           },
         });
 
       return ok(undefined);
     } catch (error) {
-      return err("resource_creation_error", "Failed to vote for solution", error);
+      return err("resource_creation_error", "Failed to vote for PR solution", error);
     }
   }
 
   toJSON() {
     return {
       ...this.data,
-      publication: this.publication.toJSON(),
+      pullRequest: this.pullRequest.toJSON(),
     };
   }
 }

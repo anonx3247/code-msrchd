@@ -1,43 +1,49 @@
-# `msrchd`
+# `code-msrchd`
 
-A leaner and simpler version of the [dust-tt/srchd](https://github.com/dust-tt/srchd) research agent system - the "mini" srchd.
+A code-focused fork of [dust-tt/srchd](https://github.com/dust-tt/srchd) where AI agents collaborate on code repositories through git workflows, pull requests, and code reviews.
 
 ![msrchd web UI](msrchd.png)
 
 ## Overview
 
-`msrchd` orchestrates AI research agents through a publication and peer review system. Agents collaborate to solve complex problems by publishing papers, reviewing each other's work, and citing relevant publications.
+`code-msrchd` orchestrates multiple AI agents that work together on code repositories. Agents manage git branches directly, create pull requests to propose solutions, review each other's code, and vote for the best implementations.
 
 ## Key Features
 
-- **Multi-agent collaboration**: Run multiple AI agents that work together on research problems
-- **Publication system**: Agents submit papers for peer review
-- **Peer review**: Agents review each other's work with accept/reject decisions
-- **Citation tracking**: Track which publications cite others to identify impactful work
-- **Solution voting**: Agents vote for the best solution to the problem
-- **Isolated execution**: Each agent runs in a Docker container with full filesystem access
+- **Direct git access**: Agents use bash commands for all git operations (create branches, commit, checkout, push)
+- **Pull requests**: Agents create PRs to propose solutions and signal reviewable work to other agents
+- **Code review**: Agents review each other's PRs with approve/request_changes/comment
+- **Solution voting**: Agents vote for the best PR to identify top solutions
+- **Automatic pause**: Agents pause when their PRs reach approval threshold, awaiting user review
+- **Multi-agent collaboration**: Run multiple AI agents that work together on the same repository
+- **Flexible sandboxing**: Choose between Docker containers or lightweight git worktrees
 - **Cost tracking**: Track token usage and costs per experiment
+- **Status updates**: Agents publish todo lists and progress updates
+- **User questions**: Agents can ask synchronous questions that block execution until answered
 
-## Simplifications from Original
+## Design Philosophy
 
-This version strips away complexity to focus on the core collaboration mechanism:
+This fork simplifies the original srchd system to focus on code collaboration:
 
-- **Single model per experiment**: All agents in an experiment use the same model, eliminating per-agent model configuration
-- **Simplified profiles**: Lightweight profiles (research, formal-math, security, arc-agi) instead of complex per-agent configuration
-- **Removed self-edit tool**: Agents track tasks in a simple `todo.md` file instead of self-editing their system prompt
-- **Unified tool set**: All agents get the same tools (computer + publications) - no per-agent tool configuration
-- **Docker instead of Kubernetes**: Direct container management instead of pod orchestration
-- **Simplified schema**: Agents are just numeric indices, not database entities
+- **Code-only focus**: Removed research/publication system, focused entirely on git workflows
+- **Single model per experiment**: All agents use the same model
+- **Direct git access**: Agents use bash commands for git operations - no abstraction layer
+- **Minimal PR tool**: Only 5 tools for PR coordination (create, list, get, review, vote)
+- **Unified tool set**: All agents get the same tools - no per-agent configuration
+- **Flexible sandboxing**: Choice between Docker containers or git worktrees
+- **Simplified schema**: Agents are numeric indices, PRs store branch names
+- **No git-database sync**: Query git directly via CLI instead of syncing to database
 
 The goal: **maximum collaboration effectiveness with minimum configuration complexity**.
 
-See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
+See [AGENT.md](./AGENT.md) for development guidelines.
 
 ## Requirements
 
 - **Node.js** v24+ required
   - On macOS with Homebrew: `export PATH="/opt/homebrew/opt/node@24/bin:$PATH"`
-- **Docker** for agent computer environments
+- **Git** for repository management and version control
+- **Docker** (optional) - required only for docker sandbox mode, not needed for worktree mode
 - **API Keys** for AI providers (at least one):
   - `ANTHROPIC_API_KEY`
   - `OPENAI_API_KEY`
@@ -75,38 +81,61 @@ npx drizzle-kit migrate
 ### 1. Create an Experiment
 
 ```bash
-npx tsx src/srchd.ts create my-first-experiment \
+npx tsx src/srchd.ts create my-code-project \
   -p problem.txt \
   -n 3 \
-  -m claude-sonnet-4-5
+  -m claude-sonnet-4-5 \
+  --repository-url https://github.com/user/repo.git \
+  --sandbox-mode worktree
 ```
 
-This creates an experiment named "my-first-experiment" with:
+This creates an experiment with:
 - Problem description from `problem.txt`
-- 3 agents
+- 3 agents collaborating on code
 - Using Claude Sonnet 4.5 model
+- Repository cloned from GitHub
+- Worktree sandbox (lightweight, no Docker needed)
 
 ### 2. Run the Experiment
 
 ```bash
-npx tsx src/srchd.ts run my-first-experiment --max-cost 5.0
+npx tsx src/srchd.ts run my-code-project --max-cost 5.0
 ```
 
-This runs all agents continuously until total cost exceeds $5.00. Agents will:
-- Work on solving the problem in isolated Docker containers
-- Submit publications with their findings
-- Review each other's work
-- Cite relevant publications
+Agents will:
+- Work in isolated git worktrees (or Docker containers if using docker mode)
+- Create branches and commit code changes using git commands
+- Create pull requests to propose solutions
+- Review each other's PRs with approve/request changes
 - Vote for the best solution
+- Pause automatically when PRs reach approval threshold
 
-### 3. View Publications
+### 3. View Pull Requests
 
-Start the web server to view experiments and publications:
 ```bash
 npx tsx src/srchd.ts serve
 ```
 
-Then open http://localhost:3000 in your browser to view experiments, publications, and reviews.
+Open http://localhost:3000 to view:
+- All pull requests with status (open, closed, merged)
+- Code diffs with syntax highlighting
+- Agent reviews and votes
+- PRs awaiting your approval
+
+## How It Works
+
+Agents collaborate on a shared git repository:
+
+1. **Agent creates branch**: Uses `git checkout -b agent-0/feature` to create a working branch
+2. **Agent makes changes**: Edits files, tests code, commits with `git commit`
+3. **Agent creates PR**: Uses `create_pull_request()` tool to signal reviewable work
+4. **Other agents review**: Checkout the branch with `git checkout agent-0/feature`, review code
+5. **Agents submit reviews**: Use `review_pull_request()` with approve/request_changes
+6. **Automatic pause**: When PR gets 2 approvals (or N-1 for small teams), agent pauses
+7. **User acts as final reviewer**: Review PR in web UI, merge or reject
+8. **Agents vote**: Use `vote_for_solution()` to identify best PR
+
+**Key insight**: Agents manage all git operations directly via bash. The PR tool is minimal - just 5 tools for coordination. This keeps complexity low while enabling full git workflow flexibility.
 
 ## CLI Commands
 
@@ -118,11 +147,18 @@ npx tsx src/srchd.ts create <name> \
   -p <problem_file> \
   -n <agent_count> \
   -m <model> \
-  --profile <profile>  # research (default), formal-math, security, arc-agi
+  --repository-url <git_url> \
+  --sandbox-mode <mode>  # docker or worktree (default: docker)
 
 # List experiments
 npx tsx src/srchd.ts list
 ```
+
+**Options:**
+- `--repository-url <url>`: Git repository URL to clone (required)
+- `--sandbox-mode <mode>`: Sandbox isolation mode
+  - `docker`: Each agent gets isolated Docker container with repo clone
+  - `worktree`: Each agent gets git worktree (lightweight, no Docker required)
 
 ### Running Agents
 
@@ -170,10 +206,17 @@ npx tsx src/srchd.ts clean <experiment> --containers-only -y
 ### Web Server
 
 ```bash
-# Start web server to view experiments and publications
+# Start web server to view experiments
 npx tsx src/srchd.ts serve
 npx tsx src/srchd.ts serve -p 8080  # Custom port
 ```
+
+The web UI shows:
+- Pull requests with status (open, closed, merged)
+- Code diffs with syntax highlighting
+- Agent reviews and votes
+- Status updates from all agents
+- PRs awaiting user approval
 
 ## Development
 
@@ -207,10 +250,20 @@ npx drizzle-kit migrate
 
 ## Tools Available to Agents
 
-Agents have access to:
+- **Computer tool**: Execute commands, read/write files, **full git access via bash commands**
+- **PR tool**: Create pull requests, review PRs, vote for solutions (5 tools total)
+- **User interaction tool**: Ask questions (blocking), publish status updates (non-blocking)
 
-- **Computer tool**: Execute commands, read/write files in isolated Docker container at `/home/agent/`
-- **Publications tool**: Submit papers, review submissions, search publications, cite work, vote for solutions
+### How Agents Use Git
+
+Agents have direct git access via bash commands:
+- Create/manage branches: `git checkout -b agent-0/feature`
+- Commit changes: `git add . && git commit -m "message"`
+- Review other agents' code: `git checkout agent-1/feature`
+- Push branches: `git push origin branch-name`
+- View diffs: `git diff branch1..branch2`
+
+**The PR tool is only for coordination** - signaling which branches to review. All actual git operations happen via bash.
 
 ## Project Structure
 
@@ -220,8 +273,22 @@ src/
 ├── runner/               # Agent execution orchestration
 ├── models/               # LLM provider integrations
 ├── tools/                # MCP tool servers
+│   ├── computer.ts       # Bash command execution
+│   ├── publications.ts   # Research mode: papers, reviews, citations
+│   ├── pr.ts             # Code mode: pull requests, reviews, voting
+│   └── user.ts           # User questions and status updates
 ├── resources/            # Database resource abstractions
-├── computer/             # Docker container management
+│   ├── experiment.ts     # Experiment management
+│   ├── repository.ts     # Git repository cloning and management
+│   ├── pull_request.ts   # PR lifecycle and approval tracking
+│   ├── pr_review.ts      # PR review submission
+│   ├── status_update.ts  # Status and todo list publishing
+│   └── ...               # Other resources
+├── computer/             # Sandbox implementations
+│   ├── interface.ts      # IComputer interface and factory
+│   ├── docker.ts         # Docker container sandbox
+│   ├── worktree.ts       # Git worktree sandbox
+│   └── image.ts          # Docker image building
 ├── db/                   # Database schema and connection
 └── lib/                  # Utilities and helpers
 ```
