@@ -14,10 +14,7 @@ import { MessageResource } from "./resources/messages";
 import { db } from "./db";
 import {
   messages,
-  reviews,
-  citations,
   solutions,
-  publications,
 } from "./db/schema";
 import { eq } from "drizzle-orm";
 import { spawn } from "child_process";
@@ -472,17 +469,8 @@ program
     console.log("  Deleting messages...");
     db.delete(messages).where(eq(messages.experiment, expId)).run();
 
-    console.log("  Deleting reviews...");
-    db.delete(reviews).where(eq(reviews.experiment, expId)).run();
-
-    console.log("  Deleting citations...");
-    db.delete(citations).where(eq(citations.experiment, expId)).run();
-
     console.log("  Deleting solutions...");
     db.delete(solutions).where(eq(solutions.experiment, expId)).run();
-
-    console.log("  Deleting publications...");
-    db.delete(publications).where(eq(publications.experiment, expId)).run();
 
     console.log("  Deleting experiment...");
     await experiment.delete();
