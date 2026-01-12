@@ -5,6 +5,7 @@ import { readFileContent } from "./lib/fs";
 import { Err, err, SrchdError } from "./lib/error";
 import { ExperimentResource } from "./resources/experiment";
 import { RepositoryResource } from "./resources/repository";
+import { PullRequestResource } from "./resources/pull_request";
 import { Runner } from "./runner";
 import { isArrayOf, isString, removeNulls } from "./lib/utils";
 import { buildComputerImage } from "./computer/image";
@@ -372,6 +373,12 @@ program
         const tick = await runner.tick();
         tickCount++;
         if (tick.isErr()) {
+          // Check if this is a pause for PR approval
+          if (tick.error.code === "pr_ready_for_approval") {
+            // eslint-disable-next-line
+            throw tick; // Throw to pause all agents
+          }
+          // Other errors are fatal
           // eslint-disable-next-line
           throw tick;
         }
@@ -381,9 +388,77 @@ program
     // Wait for agents to finish or stop
     try {
       await Promise.all(runnerPromises);
-    } catch (error) {
-      fastShutdown("Error occurred.");
-      return exitWithError(error as any);
+    } catch (error: any) {
+      // Check if this is a PR approval pause
+      if (error?.error?.code === "pr_ready_for_approval") {
+        const prNumber = error?.error?.context?.prNumber;
+
+        // Stop listening to keyboard for 'q'
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+        }
+
+        // Prompt user for decision
+        const readline = await import("readline");
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+
+        console.log(`\n\x1b[1m\x1b[32m[USER INPUT REQUIRED]\x1b[0m`);
+        console.log(`PR #${prNumber} has received full approval from all agents.`);
+        console.log(`View it at: http://localhost:3000/experiments/${experimentName}/pulls/${prNumber}`);
+
+        const answer = await new Promise<string>((resolve) => {
+          rl.question(
+            `\nDo you want to accept this PR? (y/N) `,
+            resolve,
+          );
+        });
+        rl.close();
+
+        if (answer.toLowerCase() === "y" || answer.toLowerCase() === "yes") {
+          console.log(`\n\x1b[32mPR #${prNumber} accepted! Merging...\x1b[0m`);
+
+          // TODO: Actually merge the PR and create GitHub PR
+          // For now, just mark as merged in database
+          const prResult = await PullRequestResource.findByNumber(
+            experiment.toJSON().id,
+            prNumber,
+          );
+          if (prResult.isOk()) {
+            await prResult.value.update({ status: "merged" });
+          }
+
+          fastShutdown("PR accepted and merged. Experiment complete.");
+        } else {
+          console.log(`\n\x1b[33mPR #${prNumber} rejected. Agents will continue working.\x1b[0m`);
+
+          // Mark PR as closed
+          const prResult = await PullRequestResource.findByNumber(
+            experiment.toJSON().id,
+            prNumber,
+          );
+          if (prResult.isOk()) {
+            await prResult.value.update({ status: "closed" });
+          }
+
+          // Resume keyboard listener and agents
+          if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+          }
+
+          console.log("Resuming agents...\n");
+          // Restart the agent loops
+          return; // This will exit the current run, user can restart manually
+        }
+      } else {
+        // Other errors are fatal
+        fastShutdown("Error occurred.");
+        return exitWithError(error);
+      }
     }
   });
 

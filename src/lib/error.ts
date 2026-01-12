@@ -67,6 +67,7 @@ export type ErrorCode =
   | "web_search_error"
   | "pod_deletion_error"
   | "pod_initialization_error"
+  | "pr_ready_for_approval"
   | "namespace_deletion_error"
   | "port_forward_error"
   | "string_edit_error";

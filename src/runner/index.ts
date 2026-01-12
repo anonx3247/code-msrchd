@@ -585,8 +585,9 @@ Never stay idle and always pro-actively work on solving the problem. If your PR 
       if (approvalCount >= requiredApprovals && !hasRequestedChanges) {
         console.log(`\x1b[1m\x1b[33m[PAUSE]\x1b[0m PR #${pr.number} has received full approval from all ${requiredApprovals} reviewers. Awaiting user decision.`);
         return err(
-          "agent_loop_overflow_error", // Reusing this to signal pause
-          `PR #${pr.number} "${pr.title}" has received full approval and is ready for user decision. Agent paused.`,
+          "pr_ready_for_approval", // Special error code for pause
+          `PR #${pr.number} "${pr.title}" has received full approval and is ready for user decision.`,
+          { prNumber: pr.number },
         );
       }
     }
