@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { readFileContent } from "./lib/fs";
 import { Err, err, SrchdError } from "./lib/error";
 import { ExperimentResource } from "./resources/experiment";
+import { RepositoryResource } from "./resources/repository";
 import { Runner } from "./runner";
 import { isArrayOf, isString, removeNulls } from "./lib/utils";
 import { buildComputerImage } from "./computer/image";
@@ -61,8 +62,17 @@ program
   )
   .option(
     "--profile <profile>",
-    "Profile to use (research, formal-math, security)",
-    "research",
+    "Profile to use (only 'code' is supported)",
+    "code",
+  )
+  .option(
+    "--repository-url <url>",
+    "Git repository URL to clone for code experiments",
+  )
+  .option(
+    "--sandbox-mode <mode>",
+    "Sandbox mode: docker or worktree (default: docker)",
+    "docker",
   )
   .action(async (name, options) => {
     console.log(`Creating experiment: ${name}`);
@@ -92,12 +102,32 @@ program
     }
 
     // Validate profile
-    const validProfiles = ["research", "formal-math", "security", "arc-agi"];
-    if (!validProfiles.includes(options.profile)) {
+    if (options.profile !== "code") {
       return exitWithError(
         err(
           "invalid_parameters_error",
-          `Invalid profile: ${options.profile}. Must be one of: ${validProfiles.join(", ")}`,
+          `Invalid profile: ${options.profile}. Only 'code' profile is supported.`,
+        ),
+      );
+    }
+
+    // Validate sandbox mode
+    const sandboxMode = options.sandboxMode;
+    if (sandboxMode !== "docker" && sandboxMode !== "worktree") {
+      return exitWithError(
+        err(
+          "invalid_parameters_error",
+          `Invalid sandbox mode: ${sandboxMode}. Must be 'docker' or 'worktree'`,
+        ),
+      );
+    }
+
+    // Repository URL is required
+    if (!options.repositoryUrl) {
+      return exitWithError(
+        err(
+          "invalid_parameters_error",
+          "Repository URL is required (--repository-url option)",
         ),
       );
     }
@@ -108,14 +138,46 @@ program
       model: options.model,
       agent_count: agentCount,
       profile: options.profile,
+      sandbox_mode: sandboxMode,
+      repository_url: options.repositoryUrl || null,
+      repository_path: null, // Will be set when cloned
     });
+
+    // Clone repository if URL provided
+    if (options.repositoryUrl) {
+      console.log(`\nCloning repository: ${options.repositoryUrl}`);
+      const repoResult = await RepositoryResource.clone(
+        experiment.toJSON().id,
+        options.repositoryUrl,
+        "./experiments",
+      );
+
+      if (repoResult.isErr()) {
+        // Clean up experiment
+        await experiment.delete();
+        return exitWithError(repoResult);
+      }
+
+      const repo = repoResult.value;
+
+      // Update experiment with repository path
+      await experiment.update({
+        repository_path: repo.path,
+      });
+
+      console.log(`Repository cloned to: ${repo.path}`);
+    }
 
     const e = experiment.toJSON();
     console.log(`\nExperiment created:`);
-    console.log(`  Name:    ${e.name}`);
-    console.log(`  Model:   ${e.model}`);
-    console.log(`  Agents:  ${e.agent_count}`);
-    console.log(`  Profile: ${e.profile}`);
+    console.log(`  Name:        ${e.name}`);
+    console.log(`  Model:       ${e.model}`);
+    console.log(`  Agents:      ${e.agent_count}`);
+    console.log(`  Profile:     ${e.profile}`);
+    console.log(`  Sandbox:     ${e.sandbox_mode}`);
+    if (e.repository_url) {
+      console.log(`  Repository:  ${e.repository_url}`);
+    }
   });
 
 // List command

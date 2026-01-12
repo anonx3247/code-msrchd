@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1768214019648,
+      "tag": "0000_smooth_firebird",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1768215943849,
+      "tag": "0001_gifted_hemingway",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1768216874384,
+      "tag": "0002_happy_klaw",
+      "breakpoints": true
+    }
+  ]
+}

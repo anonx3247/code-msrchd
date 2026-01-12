@@ -11,7 +11,7 @@
     "@types/node": "^22.0.0",
     "@types/tar-stream": "^3.1.4",
     "@typescript/native-preview": "^7.0.0-dev",
-    "drizzle-kit": "^0.31.4",
+    "drizzle-kit": "^0.31.8",
     "eslint": "^9.39.1",
     "tsx": "^4.0.0",
     "typescript": "^5.8.3",

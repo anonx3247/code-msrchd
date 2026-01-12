@@ -13,13 +13,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { withRetries, Result, err, ok } from "@app/lib/error";
 import { MessageResource } from "@app/resources/messages";
 import assert from "assert";
-import { PublicationResource } from "@app/resources/publication";
-import { renderListOfPublications } from "@app/tools/publications";
+import { PullRequestResource } from "@app/resources/pull_request";
+import { StatusUpdateResource } from "@app/resources/status_update";
+import { renderListOfPRs } from "@app/tools/pr";
 import { createClientServerPair, errorToCallToolResult } from "@app/lib/mcp";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { concurrentExecutor } from "@app/lib/async";
 import { assertNever } from "@app/lib/assert";
-import { createComputerServer, createPublicationsServer } from "@app/tools";
+import { createComputerServer, createPRServer, createUserServer } from "@app/tools";
 import { RunConfig } from "./config";
 import { createLLM } from "@app/models/provider";
 import { readFileSync } from "fs";
@@ -67,7 +68,8 @@ export class Runner {
   ): Promise<Result<Runner>> {
     const servers = await Promise.all([
       createComputerServer(experiment, agentIndex),
-      createPublicationsServer(experiment, agentIndex, config),
+      createPRServer(experiment, agentIndex, config),
+      createUserServer(experiment, agentIndex, config),
     ]);
     const clients = await Promise.all(
       servers.map(async (s) => {
@@ -213,16 +215,23 @@ export class Runner {
         ? this.messages[this.messages.length - 1].position() + 1
         : 0;
 
-    const reviews =
-      await PublicationResource.listByExperimentAndReviewRequested(
-        this.experiment,
-        this.agentIndex,
-      );
+    // Get PR context
+    const expData = this.experiment.toJSON();
+    const openPRs = await PullRequestResource.listByExperiment(expData.id, "open");
+    const myOpenPRs = await PullRequestResource.listByAuthor(expData.id, this.agentIndex);
 
-    const publications = await PublicationResource.listByAuthor(
-      this.experiment,
-      this.agentIndex,
-    );
+    // Get PRs needing my review (where I haven't reviewed yet)
+    const pendingReviewPRs = openPRs.filter(pr => {
+      const prData = pr.toJSON();
+      return prData.author !== this.agentIndex; // Not my own PR
+    });
+
+    // Get recent status updates from all agents
+    const recentStatusUpdates = await StatusUpdateResource.listByExperiment(expData.id);
+    const statusText = recentStatusUpdates.slice(0, 5).map(su => {
+      const suData = su.toJSON();
+      return `Agent ${suData.agent} [${suData.type}]: ${suData.content.substring(0, 200)}${suData.content.length > 200 ? "..." : ""}`;
+    }).join("\n");
 
     const m: Message = {
       role: "user",
@@ -230,14 +239,29 @@ export class Runner {
         {
           type: "text",
           text: `\
-SUBMITTED_PUBLICATIONS:
-${renderListOfPublications(publications)}
+YOUR_OPEN_PULL_REQUESTS:
+${renderListOfPRs(myOpenPRs)}
 
-PENDING_REVIEWS (to prioritize):
-${renderListOfPublications(reviews)}
+PULL_REQUESTS_TO_REVIEW:
+${renderListOfPRs(pendingReviewPRs)}
+
+RECENT_STATUS_UPDATES:
+${statusText || "(none)"}
 
 <system>
-This is an automated system message and there is no user available to respond. Proceed autonomously, making sure to use tools as only tools have visible effects on the system. Never stay idle and always pro-actively work on furthering your research (even if your publications are under review or accepted as current best solutions). Never consider your research effort as complete.
+This is an automated system message and there is no user available to respond. Proceed autonomously, making sure to use tools as only tools have visible effects on the system.
+
+You have full git access via bash. Use git commands to:
+- Create and manage your branches
+- Checkout other agents' branches to review their code
+- Clean up stale branches when done
+
+Use create_pull_request() to signal to other agents which branches to review.
+Use publish_status_update() to share your progress with other agents and the user.
+Use review_pull_request() to review PRs from other agents with approve/request_changes.
+Use vote_for_solution() to vote for the best PR solution.
+
+Never stay idle and always pro-actively work on solving the problem. If your PR gets approved by other agents, it will be paused for user review. Continue working on improvements or alternative approaches.
 <system>
 `,
           provider: null,
@@ -533,6 +557,44 @@ This is an automated system message and there is no user available to respond. P
           console.error(tr.content);
         }
       });
+    }
+
+    // Check if any PRs need user approval
+    const approvalCheck = await this.checkPRApprovals();
+    if (approvalCheck.isErr()) {
+      return approvalCheck;
+    }
+
+    return ok(undefined);
+  }
+
+  /**
+   * Check if any of the agent's PRs have reached approval threshold and need user review.
+   * Returns an error with code 'agent_paused_for_approval' if agent should pause.
+   */
+  async checkPRApprovals(): Promise<Result<void>> {
+    const expData = this.experiment.toJSON();
+    const myPRs = await PullRequestResource.listByAuthor(expData.id, this.agentIndex);
+
+    // Check each open PR by this agent
+    for (const pr of myPRs) {
+      if (pr.status !== "open") {
+        continue;
+      }
+
+      const approvalCount = await pr.getApprovalCount();
+      const hasRequestedChanges = await pr.hasRequestedChanges();
+
+      // Require at least 2 approvals and no requested changes
+      const requiredApprovals = Math.min(2, expData.agent_count - 1);
+
+      if (approvalCount >= requiredApprovals && !hasRequestedChanges) {
+        console.log(`\x1b[1m\x1b[33m[PAUSE]\x1b[0m Agent ${this.agentIndex} - PR #${pr.number} has ${approvalCount} approvals. Awaiting user review.`);
+        return err(
+          "agent_loop_overflow_error", // Reusing this to signal pause
+          `PR #${pr.number} "${pr.title}" has received ${approvalCount} approvals and is ready for user review. Agent paused.`,
+        );
+      }
     }
 
     return ok(undefined);
