@@ -6,7 +6,7 @@ import tar from "tar-stream";
 import fs from "fs";
 import path from "path";
 import { addDirectoryToTar } from "@app/lib/image";
-import { IComputer, ExecuteOptions, ExecuteResult } from "./interface";
+import { IComputer } from "./interface";
 
 const docker = new Docker();
 const DEFAULT_COMPUTER_IMAGE = "agent-computer:research";

@@ -120,7 +120,7 @@ program
       model: options.model,
       agent_count: agentCount,
       sandbox_mode: sandboxMode,
-      repository_url: options.repositoryUrl || null,
+      repository_url: options.repositoryUrl ?? null,
       repository_path: null, // Will be set when cloned
     });
 

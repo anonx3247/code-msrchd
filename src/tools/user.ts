@@ -18,7 +18,7 @@ const userQuestionQueue: Map<string, {
 export async function createUserServer(
   experiment: ExperimentResource,
   agentIndex: number,
-  config: RunConfig,
+  _config: RunConfig,
 ): Promise<McpServer> {
   const server = new McpServer({
     name: SERVER_NAME,

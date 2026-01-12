@@ -33,7 +33,7 @@ export const renderListOfPRs = (prs: PullRequestResource[]) => {
 export async function createPRServer(
   experiment: ExperimentResource,
   agentIndex: number,
-  config: RunConfig,
+  _config: RunConfig,
 ): Promise<McpServer> {
   const server = new McpServer({
     name: SERVER_NAME,
@@ -78,7 +78,7 @@ export async function createPRServer(
         title,
         description,
         source_branch,
-        target_branch: target_branch || repo.mainBranch,
+        target_branch: target_branch ?? repo.mainBranch,
         status: "open",
       });
 
@@ -147,8 +147,8 @@ export async function createPRServer(
           ? reviews
               .map(
                 (r) => `\
-Agent ${r.reviewer}: ${r.decision || "PENDING"}
-${r.content || ""}`,
+Agent ${r.reviewer}: ${r.decision ?? "PENDING"}
+${r.content ?? ""}`,
               )
               .join("\n\n")
           : "No reviews yet";

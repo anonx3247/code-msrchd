@@ -276,7 +276,6 @@ export const createApp = () => {
     const allPRs = await PullRequestResource.listByExperiment(expData.id);
     const openPRs = allPRs.filter(pr => pr.status === "open");
     const mergedPRs = allPRs.filter(pr => pr.status === "merged");
-    const closedPRs = allPRs.filter(pr => pr.status === "closed");
 
     // Count votes per PR
     const votesByPR = solutions.reduce(
@@ -502,7 +501,7 @@ export const createApp = () => {
           `git -C "${repo.path}" diff ${prData.target_branch}..${prData.source_branch} --stat`,
         );
         diffContent = stdout;
-      } catch (err) {
+      } catch {
         diffContent = "Unable to generate diff";
       }
     }
@@ -602,8 +601,9 @@ export const createApp = () => {
           `git -C "${repo.path}" diff ${prData.target_branch}..${prData.source_branch}`,
         );
         diffContent = stdout || "No changes";
-      } catch (err) {
-        diffContent = `Error generating diff: ${err}`;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        diffContent = `Error generating diff: ${message}`;
       }
     } else {
       diffContent = "Repository not found";

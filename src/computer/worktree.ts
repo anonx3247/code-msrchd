@@ -139,7 +139,7 @@ export class WorktreeComputer implements IComputer {
         ...process.env,
         GIT_WORKTREE_PATH: this.worktreePath,
         HOME: this.worktreePath,
-        ...(options?.env || {}),
+        ...(options?.env ?? {}),
       };
 
       const startTs = Date.now();
@@ -157,9 +157,9 @@ export class WorktreeComputer implements IComputer {
         durationMs: Date.now() - startTs,
       });
     } catch (error: any) {
-      const exitCode = error.code || 127;
-      const stdout = error.stdout || "";
-      const stderr = error.stderr || error.message || "";
+      const exitCode = error.code ?? 127;
+      const stdout = error.stdout ?? "";
+      const stderr = error.stderr ?? error.message ?? "";
 
       if (error.killed || error.signal === "SIGTERM") {
         return err(
