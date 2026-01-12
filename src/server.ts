@@ -5,7 +5,6 @@ import fs from "fs";
 import path from "path";
 import { ExperimentResource } from "@app/resources/experiment";
 import { MessageResource } from "@app/resources/messages";
-import { SolutionResource } from "@app/resources/solutions";
 import { PullRequestResource } from "@app/resources/pull_request";
 import { StatusUpdateResource } from "@app/resources/status_update";
 
@@ -173,7 +172,7 @@ export const createApp = () => {
       (a, b) => b.toJSON().created.getTime() - a.toJSON().created.getTime(),
     );
 
-    // Calculate costs and publications for all experiments
+    // Calculate costs and PRs for all experiments
     const experimentsWithMetadata = await Promise.all(
       experiments.map(async (exp) => {
         const cost = await MessageResource.totalCostForExperiment(exp);
@@ -185,30 +184,13 @@ export const createApp = () => {
               : `$${cost.toFixed(2)}`;
 
         const allPRs = await PullRequestResource.listByExperiment(exp.toJSON().id);
-        const solutions = await SolutionResource.listByExperiment(exp);
-
-        // Count votes per PR
-        const votesByPR = solutions.reduce(
-          (acc, sol) => {
-            const pr = sol.toJSON().pullRequest;
-            if (pr) {
-              acc[pr.id] = (acc[pr.id] || 0) + 1;
-            }
-            return acc;
-          },
-          {} as Record<number, number>,
-        );
-
-        const topVoted = Object.entries(votesByPR).sort(
-          (a, b) => b[1] - a[1],
-        )[0];
+        const openPRs = allPRs.filter(pr => pr.status === "open");
 
         return {
           exp,
           cost: formattedCost,
           prsCount: allPRs.length,
-          votesCount: solutions.length,
-          topVoted: topVoted ? `${topVoted[1]} votes` : "No votes",
+          openPRsCount: openPRs.length,
         };
       }),
     );
@@ -218,7 +200,7 @@ export const createApp = () => {
         ? `
       <h1>Experiments</h1>
       ${experimentsWithMetadata
-        .map(({ exp, cost, prsCount, votesCount, topVoted }) => {
+        .map(({ exp, cost, prsCount, openPRsCount }) => {
           const data = exp.toJSON();
           return `
           <div class="list-item">
@@ -229,9 +211,7 @@ export const createApp = () => {
               Model: <strong>${sanitizeText(data.model)}</strong> |
               Agents: <strong>${sanitizeText(data.agent_count)}</strong> |
               Cost: <strong>${sanitizeText(cost)}</strong> |
-              Pull Requests: <strong>${prsCount}</strong> |
-              Votes: <strong>${votesCount}</strong> |
-              Top: <strong>${sanitizeText(topVoted)}</strong>
+              PRs: <strong>${openPRsCount} open</strong> / <strong>${prsCount} total</strong>
             </div>
           </div>
         `;
@@ -258,7 +238,6 @@ export const createApp = () => {
     const experiment = experimentRes.value;
     const expData = experiment.toJSON();
 
-    const solutions = await SolutionResource.listByExperiment(experiment);
     const cost = await MessageResource.totalCostForExperiment(experiment);
     const formattedCost =
       cost < 0.01
@@ -272,51 +251,49 @@ export const createApp = () => {
     const openPRs = allPRs.filter(pr => pr.status === "open");
     const mergedPRs = allPRs.filter(pr => pr.status === "merged");
 
-    // Count votes per PR
-    const votesByPR = solutions.reduce(
-      (acc, sol) => {
-        const pr = sol.toJSON().pullRequest;
-        if (pr) {
-          acc[pr.id] = (acc[pr.id] || 0) + 1;
-        }
-        return acc;
-      },
-      {} as Record<number, number>,
-    );
+    // Get fully approved PRs
+    const fullyApprovedPRs = [];
+    for (const pr of openPRs) {
+      const approvalCount = await pr.getApprovalCount();
+      const hasRequestedChanges = await pr.hasRequestedChanges();
+      const requiredApprovals = expData.agent_count - 1;
 
-    const sortedVotes = Object.entries(votesByPR)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
+      if (approvalCount >= requiredApprovals && !hasRequestedChanges) {
+        fullyApprovedPRs.push(pr);
+      }
+    }
 
-    const votesContent =
-      sortedVotes.length > 0
-        ? sortedVotes
-            .map(([prId, votes]) => {
-              const pr = allPRs.find(
-                (p) => p.toJSON().id === parseInt(prId),
-              );
-              if (!pr) return "";
+    const approvedContent =
+      fullyApprovedPRs.length > 0
+        ? fullyApprovedPRs
+            .map((pr) => {
               const prData = pr.toJSON();
               return `
             <div class="vote-item">
-              PR #${prData.number}: ${sanitizeText(prData.title)}
-              - <strong>${votes} vote${votes > 1 ? "s" : ""}</strong>
+              <a href="/experiments/${sanitizeText(name)}/pulls/${prData.number}">
+                PR #${prData.number}: ${sanitizeText(prData.title)}
+              </a>
+              - <strong>✓ Fully Approved</strong>
             </div>
           `;
             })
             .join("")
-        : "<div class='empty-state'>No votes yet</div>";
+        : "<div class='empty-state'>No fully approved PRs yet</div>";
 
     const prsContent =
       allPRs.length > 0
-        ? allPRs
+        ? await Promise.all(allPRs
             .sort(
               (a, b) =>
                 b.toJSON().created.getTime() - a.toJSON().created.getTime(),
             )
-            .map((pr) => {
+            .map(async (pr) => {
               const prData = pr.toJSON();
-              const votes = votesByPR[prData.id] || 0;
+              const approvalCount = await pr.getApprovalCount();
+              const requiredApprovals = expData.agent_count - 1;
+              const approvalStatus = approvalCount >= requiredApprovals
+                ? "✓ Fully Approved"
+                : `${approvalCount}/${requiredApprovals} approvals`;
               return `
         <div class="list-item">
           <div class="list-item-title">
@@ -328,12 +305,11 @@ export const createApp = () => {
             <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span> |
             Author: <strong>Agent ${sanitizeText(prData.author)}</strong> |
             Branch: <strong>${sanitizeText(prData.source_branch)}</strong> → <strong>${sanitizeText(prData.target_branch)}</strong> |
-            Votes: <strong>${votes}</strong>
+            <strong>${approvalStatus}</strong>
           </div>
         </div>
       `;
-            })
-            .join("")
+            })).then(items => items.join(""))
         : "<div class='empty-state'>No pull requests yet</div>";
 
     const content = `
@@ -354,8 +330,8 @@ export const createApp = () => {
           <div class="stat-label">Merged PRs</div>
         </div>
         <div class="stat-item">
-          <div class="stat-value">${solutions.length}</div>
-          <div class="stat-label">Votes</div>
+          <div class="stat-value">${fullyApprovedPRs.length}</div>
+          <div class="stat-label">Fully Approved</div>
         </div>
         <div class="stat-item">
           <div class="stat-value">${sanitizeText(formattedCost)}</div>
@@ -375,9 +351,9 @@ export const createApp = () => {
         <div class="detail-value markdown-content">${sanitizeMarkdown(expData.problem)}</div>
       </div>
 
-      <h2>Top Voted Solutions</h2>
+      <h2>Fully Approved PRs</h2>
       <div class="detail-section">
-        ${votesContent}
+        ${approvedContent}
       </div>
 
       <h2>All Pull Requests (${allPRs.length})</h2>
@@ -413,15 +389,7 @@ export const createApp = () => {
     // Get reviews
     const reviews = await pr.getReviews();
     const approvalCount = await pr.getApprovalCount();
-
-    // Get votes for this PR
-    const solutions = await SolutionResource.listByExperiment(experiment);
-    const votes = solutions.filter(
-      (sol) => {
-        const prSol = sol.toJSON().pullRequest;
-        return prSol && prSol.id === prData.id;
-      },
-    ).length;
+    const requiredApprovals = expData.agent_count - 1;
 
     const reviewsContent =
       reviews.length > 0
@@ -446,6 +414,10 @@ export const createApp = () => {
     `
         : "<h2>Reviews</h2><p>No reviews yet</p>";
 
+    const approvalStatus = approvalCount >= requiredApprovals
+      ? "✓ Fully Approved"
+      : `${approvalCount}/${requiredApprovals} approvals`;
+
     const pageContent = `
       <a href="/experiments/${sanitizeText(experimentName)}" class="back-link">&larr; Back to ${sanitizeText(experimentName)}</a>
       <h1>PR #${sanitizeText(prData.number)}: ${sanitizeText(prData.title)}</h1>
@@ -453,7 +425,7 @@ export const createApp = () => {
         <span class="${safeStatusClass(prData.status)}">${sanitizeText(prData.status)}</span>
         <span>Agent ${sanitizeText(prData.author)}</span>
         <span>${sanitizeText(prData.source_branch)} → ${sanitizeText(prData.target_branch)}</span>
-        <span>${votes} vote${votes !== 1 ? "s" : ""}</span>
+        <span><strong>${approvalStatus}</strong></span>
         <span>${sanitizeText(prData.created.toLocaleString())}</span>
       </div>
 

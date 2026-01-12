@@ -15,7 +15,6 @@ import { MessageResource } from "@app/resources/messages";
 import assert from "assert";
 import { PullRequestResource } from "@app/resources/pull_request";
 import { StatusUpdateResource } from "@app/resources/status_update";
-import { SolutionResource } from "@app/resources/solutions";
 import { renderListOfPRs } from "@app/tools/pr";
 import { createClientServerPair, errorToCallToolResult } from "@app/lib/mcp";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -568,51 +567,30 @@ Never stay idle and always pro-actively work on solving the problem. If your PR 
   }
 
   /**
-   * Check if all agents have voted and pause if consensus is reached.
-   * Returns an error to signal pause when voting is complete.
+   * Check if any PR has received full approval from all other agents.
+   * Returns an error to signal pause when a PR is fully approved.
    */
   async checkPRApprovals(): Promise<Result<void>> {
     const expData = this.experiment.toJSON();
+    const allPRs = await PullRequestResource.listByExperiment(expData.id, "open");
 
-    // Check if all agents have voted
-    const allVoted = await SolutionResource.allAgentsHaveVoted(this.experiment);
+    // Check each open PR
+    for (const pr of allPRs) {
+      const approvalCount = await pr.getApprovalCount();
+      const hasRequestedChanges = await pr.hasRequestedChanges();
 
-    if (!allVoted) {
-      // Not all agents have voted yet, continue
-      return ok(undefined);
+      // PR needs approval from all other agents (total agents - 1 for the author)
+      const requiredApprovals = expData.agent_count - 1;
+
+      if (approvalCount >= requiredApprovals && !hasRequestedChanges) {
+        console.log(`\x1b[1m\x1b[33m[PAUSE]\x1b[0m PR #${pr.number} has received full approval from all ${requiredApprovals} reviewers. Awaiting user decision.`);
+        return err(
+          "agent_loop_overflow_error", // Reusing this to signal pause
+          `PR #${pr.number} "${pr.title}" has received full approval and is ready for user decision. Agent paused.`,
+        );
+      }
     }
 
-    // All agents have voted - check if there's consensus
-    const solutions = await SolutionResource.listByExperiment(this.experiment);
-
-    if (solutions.length === 0) {
-      return ok(undefined);
-    }
-
-    // Count votes per PR
-    const votesByPR: Record<number, number> = {};
-    for (const sol of solutions) {
-      const prId = sol.toJSON().pullRequest.id;
-      votesByPR[prId] = (votesByPR[prId] || 0) + 1;
-    }
-
-    // Find the PR with the most votes
-    const topVoted = Object.entries(votesByPR).sort((a, b) => b[1] - a[1])[0];
-    if (!topVoted) {
-      return ok(undefined);
-    }
-
-    const [topPrId, voteCount] = topVoted;
-    const topPR = await PullRequestResource.findById(parseInt(topPrId));
-    if (topPR.isErr()) {
-      return ok(undefined);
-    }
-
-    const pr = topPR.value;
-    console.log(`\x1b[1m\x1b[33m[PAUSE]\x1b[0m All ${expData.agent_count} agents have voted. PR #${pr.number} has ${voteCount} vote(s). Awaiting user review.`);
-    return err(
-      "agent_loop_overflow_error", // Reusing this to signal pause
-      `All agents have voted. PR #${pr.number} "${pr.title}" has ${voteCount} vote(s) and is ready for user review. Agent paused.`,
-    );
+    return ok(undefined);
   }
 }

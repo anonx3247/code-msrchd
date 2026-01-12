@@ -2,7 +2,6 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ExperimentResource } from "@app/resources/experiment";
 import { StatusUpdateResource } from "@app/resources/status_update";
-import { SolutionResource } from "@app/resources/solutions";
 import { RunConfig } from "@app/runner/config";
 
 const SERVER_NAME = "user";
@@ -39,31 +38,6 @@ export async function createUserServer(
     },
     async ({ question, timeout_seconds = 300 }) => {
       const expData = experiment.toJSON();
-
-      // Check if this is an approval question
-      const approvalKeywords = ['approve', 'approval', 'merge', 'final', 'accept', 'proceed'];
-      const isApprovalQuestion = approvalKeywords.some(keyword =>
-        question.toLowerCase().includes(keyword),
-      );
-
-      // If asking for approval, verify all agents have voted
-      if (isApprovalQuestion) {
-        const allVoted = await SolutionResource.allAgentsHaveVoted(experiment);
-        const voteCount = await SolutionResource.getVoteCount(expData.id);
-
-        if (!allVoted) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Cannot request human approval yet. Only ${voteCount} out of ${expData.agent_count} agents have voted on solutions. All agents must vote before requesting approval.`,
-              },
-            ],
-          };
-        }
-      }
-
       const questionId = `${expData.name}-agent-${agentIndex}-${Date.now()}`;
 
       // Add question to queue
