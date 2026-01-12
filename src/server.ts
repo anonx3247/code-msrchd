@@ -7,6 +7,9 @@ import { ExperimentResource } from "@app/resources/experiment";
 import { MessageResource } from "@app/resources/messages";
 import { PullRequestResource } from "@app/resources/pull_request";
 import { StatusUpdateResource } from "@app/resources/status_update";
+import { db } from "@app/db";
+import { user_questions } from "@app/db/schema";
+import { eq, and, desc } from "drizzle-orm";
 
 const sanitizeText = (value: unknown): string => {
   const input =

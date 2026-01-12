@@ -3,17 +3,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ExperimentResource } from "@app/resources/experiment";
 import { StatusUpdateResource } from "@app/resources/status_update";
 import { RunConfig } from "@app/runner/config";
+import { db } from "@app/db";
+import { user_questions } from "@app/db/schema";
+import { eq, and } from "drizzle-orm";
 
 const SERVER_NAME = "user";
 const SERVER_VERSION = "0.1.0";
-
-// Simple in-memory queue for user questions
-// In a production system, this would be persisted to disk/database
-const userQuestionQueue: Map<string, {
-  question: string;
-  answer: string | null;
-  timestamp: number;
-}> = new Map();
 
 export async function createUserServer(
   experiment: ExperimentResource,
@@ -38,19 +33,23 @@ export async function createUserServer(
     },
     async ({ question, timeout_seconds = 300 }) => {
       const expData = experiment.toJSON();
-      const questionId = `${expData.name}-agent-${agentIndex}-${Date.now()}`;
 
-      // Add question to queue
-      userQuestionQueue.set(questionId, {
-        question,
-        answer: null,
-        timestamp: Date.now(),
-      });
+      // Store question in database
+      const [questionRecord] = await db
+        .insert(user_questions)
+        .values({
+          experiment: expData.id,
+          agent: agentIndex,
+          question,
+          status: "pending",
+        })
+        .returning();
 
       console.log(`\n\x1b[1m\x1b[36m[USER QUESTION]\x1b[0m Agent ${agentIndex} asks:`);
       console.log(`\x1b[36m${question}\x1b[0m`);
-      console.log(`\x1b[90m(Question ID: ${questionId})\x1b[0m`);
-      console.log(`\x1b[90mWaiting for answer... (timeout: ${timeout_seconds}s)\x1b[0m\n`);
+      console.log(`\x1b[90m(Question ID: ${questionRecord.id})\x1b[0m`);
+      console.log(`\x1b[90mWaiting for answer... (timeout: ${timeout_seconds}s)\x1b[0m`);
+      console.log(`\x1b[90mAnswer at: http://localhost:3000/experiments/${expData.name}/status\x1b[0m\n`);
 
       // Poll for answer with timeout
       const startTime = Date.now();
@@ -58,18 +57,28 @@ export async function createUserServer(
       const timeoutMs = timeout_seconds * 1000;
 
       while (Date.now() - startTime < timeoutMs) {
-        const entry = userQuestionQueue.get(questionId);
-        if (entry && entry.answer !== null) {
+        const [updated] = await db
+          .select()
+          .from(user_questions)
+          .where(eq(user_questions.id, questionRecord.id))
+          .limit(1);
+
+        if (updated && updated.answer) {
           // Got an answer!
-          const answer = entry.answer;
-          userQuestionQueue.delete(questionId);
+          await db
+            .update(user_questions)
+            .set({
+              status: "answered",
+              answered: new Date(),
+            })
+            .where(eq(user_questions.id, questionRecord.id));
 
           return {
             isError: false,
             content: [
               {
                 type: "text",
-                text: `User answered: ${answer}`,
+                text: `User answered: ${updated.answer}`,
               },
             ],
           };
@@ -80,7 +89,11 @@ export async function createUserServer(
       }
 
       // Timeout
-      userQuestionQueue.delete(questionId);
+      await db
+        .update(user_questions)
+        .set({ status: "timeout" })
+        .where(eq(user_questions.id, questionRecord.id));
+
       return {
         isError: false,
         content: [
@@ -149,31 +162,4 @@ export async function createUserServer(
   );
 
   return server;
-}
-
-// Export function to answer user questions (to be called from CLI)
-export function answerUserQuestion(questionId: string, answer: string): boolean {
-  const entry = userQuestionQueue.get(questionId);
-  if (!entry) {
-    return false;
-  }
-
-  entry.answer = answer;
-  userQuestionQueue.set(questionId, entry);
-  return true;
-}
-
-// Export function to list pending questions (for CLI)
-export function listPendingQuestions(): Array<{ id: string; question: string; timestamp: number }> {
-  const pending: Array<{ id: string; question: string; timestamp: number }> = [];
-  userQuestionQueue.forEach((entry, id) => {
-    if (entry.answer === null) {
-      pending.push({
-        id,
-        question: entry.question,
-        timestamp: entry.timestamp,
-      });
-    }
-  });
-  return pending;
 }

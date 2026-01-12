@@ -204,3 +204,31 @@ export const status_updates = sqliteTable(
     index("status_updates_idx_type").on(t.type),
   ],
 );
+
+export const user_questions = sqliteTable(
+  "user_questions",
+  {
+    id: integer("id").primaryKey(),
+    created: integer("created", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    answered: integer("answered", { mode: "timestamp" }),
+
+    experiment: integer("experiment")
+      .notNull()
+      .references(() => experiments.id),
+    agent: integer("agent").notNull(),
+
+    question: text("question").notNull(),
+    answer: text("answer"),
+    status: text("status", {
+      enum: ["pending", "answered", "timeout"],
+    })
+      .notNull()
+      .default("pending"),
+  },
+  (t) => [
+    index("user_questions_idx_experiment").on(t.experiment),
+    index("user_questions_idx_status").on(t.status),
+  ],
+);
